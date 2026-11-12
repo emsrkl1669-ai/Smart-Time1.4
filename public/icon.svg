@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <linearGradient id="grad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#4f46e5" />
+      <stop offset="100%" stop-color="#059669" />
+    </linearGradient>
+    <filter id="shadow" x="-10%" y="-10%" width="120%" height="120%">
+      <feDropShadow dx="0" dy="8" stdDeviation="12" flood-opacity="0.3"/>
+    </filter>
+  </defs>
+  <rect width="512" height="512" rx="112" fill="url(#grad)" />
+  <circle cx="256" cy="256" r="160" fill="white" opacity="0.15" />
+  
+  <!-- Clock Circle -->
+  <circle cx="256" cy="256" r="130" stroke="white" stroke-width="18" fill="none" filter="url(#shadow)" />
+  
+  <!-- Clock Hands -->
+  <line x1="256" y1="256" x2="256" y2="166" stroke="white" stroke-width="16" stroke-linecap="round" />
+  <line x1="256" y1="256" x2="326" y2="256" stroke="white" stroke-width="16" stroke-linecap="round" />
+  <circle cx="256" cy="256" r="14" fill="white" />
+  
+  <!-- Map Pin Badge -->
+  <g transform="translate(310, 80) scale(1.1)" filter="url(#shadow)">
+    <path d="M 40 0 C 18 0 0 18 0 40 C 0 70 40 110 40 110 C 40 110 80 70 80 40 C 80 18 62 0 40 0 Z" fill="#ef4444" />
+    <circle cx="40" cy="40" r="16" fill="white" />
+  </g>
+</svg>

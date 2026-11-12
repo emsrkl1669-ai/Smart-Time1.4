@@ -1,0 +1,152 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "User account for staff, rescue volunteers, and administrators",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "username": { "type": "string" },
+        "password": { "type": "string" },
+        "fullName": { "type": "string" },
+        "role": { "type": "string", "enum": ["admin", "employee", "volunteer"] },
+        "departmentId": { "type": "string" },
+        "departmentName": { "type": "string" },
+        "position": { "type": "string" },
+        "employeeCode": { "type": "string" },
+        "phoneNumber": { "type": "string" },
+        "profileImage": { "type": "string" },
+        "status": { "type": "string", "enum": ["active", "inactive"] },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["id", "username", "fullName", "role", "departmentId", "departmentName"]
+    },
+    "Department": {
+      "title": "Department",
+      "description": "Organizational department or unit",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "code": { "type": "string" },
+        "color": { "type": "string" },
+        "description": { "type": "string" },
+        "lineNotifyToken": { "type": "string" },
+        "notifyOnCheckIn": { "type": "boolean" },
+        "notifyOnCheckOut": { "type": "boolean" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["id", "name", "code"]
+    },
+    "WorkLocation": {
+      "title": "WorkLocation",
+      "description": "Designated operational work location and geofence checkpoint",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "address": { "type": "string" },
+        "latitude": { "type": "number" },
+        "longitude": { "type": "number" },
+        "radiusMeters": { "type": "number" },
+        "responsibleDepartmentId": { "type": "string" },
+        "responsibleDepartmentName": { "type": "string" },
+        "isActive": { "type": "boolean" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["id", "name", "latitude", "longitude", "radiusMeters"]
+    },
+    "AttendanceRecord": {
+      "title": "AttendanceRecord",
+      "description": "Check-in and check-out attendance records with GPS and photo",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "userId": { "type": "string" },
+        "userName": { "type": "string" },
+        "userRole": { "type": "string", "enum": ["admin", "employee", "volunteer"] },
+        "departmentId": { "type": "string" },
+        "departmentName": { "type": "string" },
+        "type": { "type": "string", "enum": ["check_in", "check_out"] },
+        "timestamp": { "type": "string" },
+        "date": { "type": "string" },
+        "time": { "type": "string" },
+        "photo": { "type": "string" },
+        "latitude": { "type": "number" },
+        "longitude": { "type": "number" },
+        "accuracy": { "type": "number" },
+        "locationName": { "type": "string" },
+        "workLocationId": { "type": "string" },
+        "workLocationName": { "type": "string" },
+        "isWithinGeofence": { "type": "boolean" },
+        "distanceFromLocationMeters": { "type": "number" },
+        "deviceOs": { "type": "string" },
+        "note": { "type": "string" },
+        "isOfflineRecord": { "type": "boolean" },
+        "lineNotificationStatus": { "type": "string" },
+        "lineTargetDepartment": { "type": "string" }
+      },
+      "required": ["id", "userId", "userName", "type", "timestamp", "date", "time"]
+    },
+    "SystemSettings": {
+      "title": "SystemSettings",
+      "description": "Global application and organization settings",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "appName": { "type": "string" },
+        "organizationName": { "type": "string" },
+        "requirePhoto": { "type": "boolean" },
+        "requireGeofence": { "type": "boolean" },
+        "defaultGeofenceRadiusMeters": { "type": "number" },
+        "lineChannelAccessToken": { "type": "string" },
+        "allowOfflineMode": { "type": "boolean" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["id", "appName", "organizationName"]
+    },
+    "LineNotificationLog": {
+      "title": "LineNotificationLog",
+      "description": "Log of LINE notifications dispatched or simulated",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "departmentId": { "type": "string" },
+        "departmentName": { "type": "string" },
+        "recordId": { "type": "string" },
+        "userName": { "type": "string" },
+        "type": { "type": "string" },
+        "timestamp": { "type": "string" },
+        "status": { "type": "string" },
+        "responseDetails": { "type": "string" }
+      },
+      "required": ["id", "recordId", "userName", "type", "timestamp", "status"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/User" },
+      "description": "Collection of all system users (staff, volunteers, admins)"
+    },
+    "/departments/{departmentId}": {
+      "schema": { "$ref": "#/entities/Department" },
+      "description": "Collection of organization departments"
+    },
+    "/locations/{locationId}": {
+      "schema": { "$ref": "#/entities/WorkLocation" },
+      "description": "Collection of designated work stations and geofence locations"
+    },
+    "/attendance/{attendanceId}": {
+      "schema": { "$ref": "#/entities/AttendanceRecord" },
+      "description": "Collection of check-in and check-out logs"
+    },
+    "/settings/{settingsId}": {
+      "schema": { "$ref": "#/entities/SystemSettings" },
+      "description": "Global system settings document"
+    },
+    "/lineLogs/{logId}": {
+      "schema": { "$ref": "#/entities/LineNotificationLog" },
+      "description": "Collection of LINE notification logs"
+    }
+  }
+}

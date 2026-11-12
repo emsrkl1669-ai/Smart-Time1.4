@@ -1,0 +1,9 @@
+{
+  "name": "Smart Time Attendance & Geo Check-in",
+  "description": "ระบบลงเวลาเข้า-ออกงานอัจฉริยะ ปักหมุดพิกัด GPS ถ่ายรูปเซลฟี่ จัดการแผนก แจ้งเตือนผ่าน LINE Notify และรองรับออฟไลน์ซิงค์",
+  "requestFramePermissions": [
+    "camera",
+    "geolocation"
+  ],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

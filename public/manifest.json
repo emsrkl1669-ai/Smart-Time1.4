@@ -1,0 +1,33 @@
+{
+  "id": "/",
+  "name": "Smart Time Attendance & Geo Check-in",
+  "short_name": "ลงเวลา",
+  "description": "ระบบลงเวลาเข้า-ออกงานอัจฉริยะ ปักหมุดพิกัด GPS ถ่ายรูปเซลฟี่ แจ้งเตือน LINE Notify",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#0f172a",
+  "theme_color": "#4f46e5",
+  "orientation": "portrait",
+  "lang": "th",
+  "icons": [
+    {
+      "src": "/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icon-512-maskable.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ]
+}
