@@ -1,6 +1,20 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Department, SystemSettings, LineNotificationLog } from '../types';
-import { Bell, Send, CheckCircle2, AlertCircle, RefreshCw, Key, Building2, HelpCircle, ExternalLink, ShieldCheck, History } from 'lucide-react';
+import {
+  Bell,
+  Send,
+  CheckCircle2,
+  AlertCircle,
+  RefreshCw,
+  Key,
+  Building2,
+  HelpCircle,
+  ExternalLink,
+  ShieldCheck,
+  History,
+  Settings2,
+  Clock,
+} from 'lucide-react';
 import { api } from '../services/api';
 
 interface AdminLineSettingsProps {
@@ -14,10 +28,38 @@ export const AdminLineSettings: React.FC<AdminLineSettingsProps> = ({
   departments,
   onRefresh,
 }) => {
+  // General System Settings state
+  const [companyName, setCompanyName] = useState(
+    settings.companyName || 'มูลนิธิร่วมกุศล สมุทรปราการ'
+  );
+  const [standardCheckInTime, setStandardCheckInTime] = useState(
+    settings.standardCheckInTime || '08:30'
+  );
+  const [standardCheckOutTime, setStandardCheckOutTime] = useState(
+    settings.standardCheckOutTime || '17:30'
+  );
+  const [allowOfflineCheckIn, setAllowOfflineCheckIn] = useState(
+    settings.allowOfflineCheckIn ?? true
+  );
+  const [requirePhotoOnCheckIn, setRequirePhotoOnCheckIn] = useState(
+    settings.requirePhotoOnCheckIn ?? true
+  );
+  const [requireLocationOnCheckIn, setRequireLocationOnCheckIn] = useState(
+    settings.requireLocationOnCheckIn ?? true
+  );
+  const [enforceLocationGeofence, setEnforceLocationGeofence] = useState(
+    settings.enforceLocationGeofence ?? false
+  );
+
+  // LINE Notification state
   const [defaultToken, setDefaultToken] = useState(settings.defaultLineToken || '');
   const [enableLine, setEnableLine] = useState(settings.enableLineNotifications ?? true);
   const [departmentTokens, setDepartmentTokens] = useState<Record<string, string>>({});
-  
+
+  // Dirty flag prevents background 3s sync-polling from overwriting Admin edits while typing
+  const isDirtyRef = useRef(false);
+  const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
+
   // Test State
   const [selectedDeptForTest, setSelectedDeptForTest] = useState<string>('default');
   const [testResult, setTestResult] = useState<{
@@ -29,12 +71,20 @@ export const AdminLineSettings: React.FC<AdminLineSettingsProps> = ({
   const [isTesting, setIsTesting] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
 
   // Logs
   const [logs, setLogs] = useState<LineNotificationLog[]>([]);
   const [isLoadingLogs, setIsLoadingLogs] = useState(false);
 
-  useEffect(() => {
+  const syncFromProps = () => {
+    setCompanyName(settings.companyName || 'มูลนิธิร่วมกุศล สมุทรปราการ');
+    setStandardCheckInTime(settings.standardCheckInTime || '08:30');
+    setStandardCheckOutTime(settings.standardCheckOutTime || '17:30');
+    setAllowOfflineCheckIn(settings.allowOfflineCheckIn ?? true);
+    setRequirePhotoOnCheckIn(settings.requirePhotoOnCheckIn ?? true);
+    setRequireLocationOnCheckIn(settings.requireLocationOnCheckIn ?? true);
+    setEnforceLocationGeofence(settings.enforceLocationGeofence ?? false);
     setDefaultToken(settings.defaultLineToken || '');
     setEnableLine(settings.enableLineNotifications ?? true);
 
@@ -43,9 +93,23 @@ export const AdminLineSettings: React.FC<AdminLineSettingsProps> = ({
       initialDeptTokens[d.id] = d.lineNotifyToken || '';
     });
     setDepartmentTokens(initialDeptTokens);
+  };
 
-    loadLogs();
+  useEffect(() => {
+    if (!isDirtyRef.current) {
+      syncFromProps();
+    }
   }, [settings, departments]);
+
+  useEffect(() => {
+    loadLogs();
+  }, []);
+
+  const markDirty = () => {
+    isDirtyRef.current = true;
+    setHasUnsavedChanges(true);
+    setSaveError(null);
+  };
 
   const loadLogs = async () => {
     setIsLoadingLogs(true);
@@ -63,30 +127,41 @@ export const AdminLineSettings: React.FC<AdminLineSettingsProps> = ({
     e.preventDefault();
     setIsSaving(true);
     setSaveSuccess(false);
+    setSaveError(null);
 
     try {
-      // 1. Update Global settings
+      // 1. Update Global system & LINE settings
       await api.updateSettings({
+        companyName: companyName.trim() || 'มูลนิธิร่วมกุศล สมุทรปราการ',
+        standardCheckInTime: standardCheckInTime || '08:30',
+        standardCheckOutTime: standardCheckOutTime || '17:30',
+        allowOfflineCheckIn,
+        requirePhotoOnCheckIn,
+        requireLocationOnCheckIn,
+        enforceLocationGeofence,
         defaultLineToken: defaultToken.trim(),
         enableLineNotifications: enableLine,
       });
 
-      // 2. Update each department token
+      // 2. Update each department token that changed
       for (const dept of departments) {
-        const tokenForDept = departmentTokens[dept.id] ?? dept.lineNotifyToken ?? '';
-        if (tokenForDept !== dept.lineNotifyToken) {
+        const tokenForDept = (departmentTokens[dept.id] ?? dept.lineNotifyToken ?? '').trim();
+        const currentToken = (dept.lineNotifyToken || '').trim();
+        if (tokenForDept !== currentToken) {
           await api.saveDepartment({
             id: dept.id,
-            lineNotifyToken: tokenForDept.trim(),
+            lineNotifyToken: tokenForDept,
           });
         }
       }
 
+      isDirtyRef.current = false;
+      setHasUnsavedChanges(false);
       setSaveSuccess(true);
-      setTimeout(() => setSaveSuccess(false), 3000);
+      setTimeout(() => setSaveSuccess(false), 4000);
       onRefresh();
     } catch (err: any) {
-      alert(err.message || 'บันทึกไม่สำเร็จ');
+      setSaveError(err?.message || 'บันทึกการตั้งค่าไม่สำเร็จ กรุณาลองใหม่อีกครั้ง');
     } finally {
       setIsSaving(false);
     }
@@ -119,19 +194,35 @@ export const AdminLineSettings: React.FC<AdminLineSettingsProps> = ({
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-100">
         <div>
           <h3 className="text-base sm:text-lg font-bold text-slate-800 flex items-center gap-2">
-            <Bell className="w-5 h-5 text-emerald-600" /> ตั้งค่าระบบแจ้งเตือน LINE Notify รายแผนก
+            <Settings2 className="w-5 h-5 text-emerald-600" /> ตั้งค่าระบบองค์กร & LINE Notify รายแผนก
           </h3>
           <p className="text-xs text-slate-500 mt-0.5">
-            กำหนด Token ของแต่ละกลุ่ม/แผนก เพื่อให้การแจ้งเตือนส่งตรงถึงห้อง LINE ที่ถูกต้องอย่างแม่นยำ
+            Admin สามารถแก้ไขข้อมูลองค์กร เวลามาตรฐาน กฎการลงเวลา และ LINE Token ของแต่ละกลุ่มได้ทั้งหมด
           </p>
         </div>
 
         <div className="flex items-center gap-2">
+          {hasUnsavedChanges && (
+            <button
+              type="button"
+              onClick={() => {
+                isDirtyRef.current = false;
+                setHasUnsavedChanges(false);
+                syncFromProps();
+              }}
+              className="px-3 py-1.5 rounded-xl text-xs font-semibold text-slate-600 bg-slate-100 hover:bg-slate-200 transition cursor-pointer"
+            >
+              คืนค่าล่าสุด
+            </button>
+          )}
           <label className="flex items-center gap-2 cursor-pointer bg-slate-100 px-3 py-1.5 rounded-xl text-xs font-semibold text-slate-700">
             <input
               type="checkbox"
               checked={enableLine}
-              onChange={(e) => setEnableLine(e.target.checked)}
+              onChange={(e) => {
+                markDirty();
+                setEnableLine(e.target.checked);
+              }}
               className="rounded text-emerald-600 focus:ring-emerald-500"
             />
             <span>เปิดใช้งานระบบ LINE</span>
@@ -139,7 +230,128 @@ export const AdminLineSettings: React.FC<AdminLineSettingsProps> = ({
         </div>
       </div>
 
+      {saveError && (
+        <div className="p-3 bg-rose-50 border border-rose-200 text-rose-700 text-xs font-semibold rounded-xl flex items-center gap-2">
+          <AlertCircle className="w-4 h-4 shrink-0 text-rose-600" />
+          <span>{saveError}</span>
+        </div>
+      )}
+
       <form onSubmit={handleSaveAll} className="space-y-6">
+        {/* General Organization & Attendance Settings */}
+        <div className="bg-indigo-50/40 p-4 sm:p-5 rounded-2xl border border-indigo-100 space-y-4">
+          <div className="flex items-center justify-between">
+            <h4 className="text-xs sm:text-sm font-bold text-slate-800 flex items-center gap-1.5">
+              <Clock className="w-4 h-4 text-indigo-600" />
+              <span>ตั้งค่าองค์กร เวลามาตรฐาน และเงื่อนไขการลงเวลา</span>
+            </h4>
+            <span className="text-[11px] text-indigo-600 font-medium">มีผลทันทีทุกเครื่อง</span>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <div className="sm:col-span-1">
+              <label className="block text-xs font-semibold text-slate-700 mb-1">
+                ชื่อองค์กร / หน่วยงาน *
+              </label>
+              <input
+                type="text"
+                required
+                value={companyName}
+                onChange={(e) => {
+                  markDirty();
+                  setCompanyName(e.target.value);
+                }}
+                placeholder="มูลนิธิร่วมกุศล สมุทรปราการ"
+                className="w-full text-xs sm:text-sm p-2.5 bg-white rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold text-slate-700 mb-1">
+                เวลาเข้างานมาตรฐาน
+              </label>
+              <input
+                type="time"
+                value={standardCheckInTime}
+                onChange={(e) => {
+                  markDirty();
+                  setStandardCheckInTime(e.target.value);
+                }}
+                className="w-full text-xs sm:text-sm p-2.5 bg-white rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500 font-mono"
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold text-slate-700 mb-1">
+                เวลาออกงานมาตรฐาน
+              </label>
+              <input
+                type="time"
+                value={standardCheckOutTime}
+                onChange={(e) => {
+                  markDirty();
+                  setStandardCheckOutTime(e.target.value);
+                }}
+                className="w-full text-xs sm:text-sm p-2.5 bg-white rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500 font-mono"
+              />
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5 pt-1">
+            <label className="flex items-center gap-2 p-2.5 bg-white rounded-xl border border-slate-200 cursor-pointer text-xs text-slate-700">
+              <input
+                type="checkbox"
+                checked={allowOfflineCheckIn}
+                onChange={(e) => {
+                  markDirty();
+                  setAllowOfflineCheckIn(e.target.checked);
+                }}
+                className="rounded text-indigo-600 focus:ring-indigo-500"
+              />
+              <span>อนุญาตลงเวลาออฟไลน์</span>
+            </label>
+
+            <label className="flex items-center gap-2 p-2.5 bg-white rounded-xl border border-slate-200 cursor-pointer text-xs text-slate-700">
+              <input
+                type="checkbox"
+                checked={requirePhotoOnCheckIn}
+                onChange={(e) => {
+                  markDirty();
+                  setRequirePhotoOnCheckIn(e.target.checked);
+                }}
+                className="rounded text-indigo-600 focus:ring-indigo-500"
+              />
+              <span>บังคับถ่ายรูปยืนยันตัวตน</span>
+            </label>
+
+            <label className="flex items-center gap-2 p-2.5 bg-white rounded-xl border border-slate-200 cursor-pointer text-xs text-slate-700">
+              <input
+                type="checkbox"
+                checked={requireLocationOnCheckIn}
+                onChange={(e) => {
+                  markDirty();
+                  setRequireLocationOnCheckIn(e.target.checked);
+                }}
+                className="rounded text-indigo-600 focus:ring-indigo-500"
+              />
+              <span>บังคับดึงพิกัด GPS</span>
+            </label>
+
+            <label className="flex items-center gap-2 p-2.5 bg-white rounded-xl border border-slate-200 cursor-pointer text-xs text-slate-700">
+              <input
+                type="checkbox"
+                checked={enforceLocationGeofence}
+                onChange={(e) => {
+                  markDirty();
+                  setEnforceLocationGeofence(e.target.checked);
+                }}
+                className="rounded text-indigo-600 focus:ring-indigo-500"
+              />
+              <span>จำกัดเฉพาะในรัศมีจุดปฏิบัติงาน</span>
+            </label>
+          </div>
+        </div>
+
         {/* Main Fallback Token */}
         <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200 space-y-2">
           <div className="flex items-center justify-between">
@@ -153,7 +365,10 @@ export const AdminLineSettings: React.FC<AdminLineSettingsProps> = ({
           <input
             type="text"
             value={defaultToken}
-            onChange={(e) => setDefaultToken(e.target.value)}
+            onChange={(e) => {
+              markDirty();
+              setDefaultToken(e.target.value);
+            }}
             placeholder="วาง LINE Notify Token ของส่วนกลางที่นี่ (เช่น e8a9xxxxxxxxxxxxx)"
             className="w-full text-xs sm:text-sm p-3 bg-white rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-emerald-500 font-mono"
           />
@@ -200,12 +415,13 @@ export const AdminLineSettings: React.FC<AdminLineSettingsProps> = ({
                   <input
                     type="text"
                     value={val}
-                    onChange={(e) =>
+                    onChange={(e) => {
+                      markDirty();
                       setDepartmentTokens({
                         ...departmentTokens,
                         [dept.id]: e.target.value,
-                      })
-                    }
+                      });
+                    }}
                     placeholder={`Token กลุ่ม LINE ของ ${dept.name}`}
                     className="w-full text-xs p-2.5 bg-slate-50 rounded-xl border border-slate-200 focus:bg-white focus:outline-none focus:ring-2 focus:ring-emerald-500 font-mono"
                   />
@@ -220,19 +436,19 @@ export const AdminLineSettings: React.FC<AdminLineSettingsProps> = ({
         </div>
 
         {/* Save button & status */}
-        <div className="flex items-center gap-3 pt-2">
+        <div className="flex flex-wrap items-center gap-3 pt-2">
           <button
             type="submit"
             disabled={isSaving}
             className="px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white text-xs sm:text-sm font-bold rounded-xl transition shadow-xs active:scale-95 disabled:opacity-50 cursor-pointer flex items-center gap-1.5"
           >
             <ShieldCheck className="w-4 h-4" />
-            <span>{isSaving ? 'กำลังบันทึก...' : 'บันทึกการตั้งค่า LINE ทั้งหมด'}</span>
+            <span>{isSaving ? 'กำลังบันทึก...' : 'บันทึกการตั้งค่าระบบและ LINE ทั้งหมด'}</span>
           </button>
 
           {saveSuccess && (
             <span className="text-xs text-emerald-700 font-semibold flex items-center gap-1 animate-in fade-in">
-              <CheckCircle2 className="w-4 h-4 text-emerald-600" /> บันทึกการตั้งค่าสำเร็จแล้ว
+              <CheckCircle2 className="w-4 h-4 text-emerald-600" /> บันทึกการตั้งค่าสำเร็จแล้ว (อัปเดตฐานข้อมูลกลางเรียบร้อย)
             </span>
           )}
         </div>

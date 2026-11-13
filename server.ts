@@ -43,9 +43,9 @@ try {
 async function firestoreSet(collectionName: string, docId: string, data: any) {
   if (!firestoreDb) return;
   try {
-    // Strip undefined values before writing to Firestore
+    // Replace full document cleanly so cleared/emptied fields never resurrect from old merge data
     const cleanData = JSON.parse(JSON.stringify(data));
-    await setDoc(doc(firestoreDb, collectionName, docId), cleanData, { merge: true });
+    await setDoc(doc(firestoreDb, collectionName, docId), cleanData);
   } catch (err) {
     console.warn(`Firestore write notice (${collectionName}/${docId}):`, err);
   }
@@ -70,6 +70,52 @@ const BASELINE_FILE = path.join(DATA_DIR, 'roster_baseline.json');
 const ADMIN_JOURNAL_FILE = path.join(DATA_DIR, 'admin_edits_journal.jsonl');
 let lastBackupTimestamp = new Date().toISOString();
 let dbVersion = Date.now();
+let lastCloudMetaCheck = 0;
+
+async function firestoreUpdateSyncMeta() {
+  dbVersion = Date.now();
+  if (!firestoreDb) return;
+  await firestoreSet('_meta', 'sync', {
+    version: dbVersion,
+    lastBackupTimestamp,
+    counts: {
+      users: db?.users?.length || 0,
+      locations: db?.locations?.length || 0,
+      departments: db?.departments?.length || 0,
+      attendance: db?.attendance?.length || 0,
+    },
+    updatedAt: new Date().toISOString(),
+  });
+}
+
+async function syncFromFirestoreIfNewer() {
+  if (!firestoreDb) return;
+  const now = Date.now();
+  if (now - lastCloudMetaCheck < 4000) return;
+  lastCloudMetaCheck = now;
+  try {
+    const metaSnap = await Promise.race([
+      getDoc(doc(firestoreDb, '_meta', 'sync')),
+      new Promise<null>((resolve) => setTimeout(() => resolve(null), 3000)),
+    ]);
+    if (metaSnap && metaSnap.exists()) {
+      const meta = metaSnap.data() as any;
+      if (meta?.version && Number(meta.version) > dbVersion) {
+        const cloudData = await loadFromFirestore();
+        if (cloudData) {
+          if (cloudData.users && cloudData.users.length > 0) db.users = cloudData.users;
+          if (cloudData.departments && cloudData.departments.length > 0) db.departments = cloudData.departments;
+          if (cloudData.locations && cloudData.locations.length > 0) db.locations = cloudData.locations;
+          if (cloudData.attendance) db.attendance = cloudData.attendance;
+          if (cloudData.settings) db.settings = { ...db.settings, ...cloudData.settings };
+          saveDatabase(db);
+          rewriteAttendanceArchive(db.attendance);
+          dbVersion = Number(meta.version);
+        }
+      }
+    }
+  } catch {}
+}
 
 interface AdminJournalEntry {
   entity: 'user' | 'location' | 'department' | 'settings';
@@ -80,7 +126,7 @@ interface AdminJournalEntry {
 }
 
 // Append-only journal for Admin mutations to guarantee they can NEVER revert or be lost
-function appendToAdminJournal(action: AdminJournalEntry) {
+async function appendToAdminJournal(action: AdminJournalEntry) {
   try {
     if (!fs.existsSync(DATA_DIR)) {
       fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -92,25 +138,26 @@ function appendToAdminJournal(action: AdminJournalEntry) {
     if (firestoreDb) {
       if (action.entity === 'user') {
         if (action.op === 'delete' && action.id) {
-          firestoreDelete('users', action.id);
+          await firestoreDelete('users', action.id);
         } else if (action.data && (action.id || action.data.id)) {
-          firestoreSet('users', action.id || action.data.id, action.data);
+          await firestoreSet('users', action.id || action.data.id, action.data);
         }
       } else if (action.entity === 'location') {
         if (action.op === 'delete' && action.id) {
-          firestoreDelete('locations', action.id);
+          await firestoreDelete('locations', action.id);
         } else if (action.data && (action.id || action.data.id)) {
-          firestoreSet('locations', action.id || action.data.id, action.data);
+          await firestoreSet('locations', action.id || action.data.id, action.data);
         }
       } else if (action.entity === 'department') {
         if (action.op === 'delete' && action.id) {
-          firestoreDelete('departments', action.id);
+          await firestoreDelete('departments', action.id);
         } else if (action.data && (action.id || action.data.id)) {
-          firestoreSet('departments', action.id || action.data.id, action.data);
+          await firestoreSet('departments', action.id || action.data.id, action.data);
         }
       } else if (action.entity === 'settings' && action.data) {
-        firestoreSet('settings', 'global', action.data);
+        await firestoreSet('settings', 'global', action.data);
       }
+      await firestoreUpdateSyncMeta();
     }
   } catch (err) {
     console.error('Failed to append to admin journal:', err);
@@ -138,7 +185,7 @@ function loadAdminJournal(): AdminJournalEntry[] {
   }
 }
 
-// Permanent append-only attendance archive helper
+// Permanent attendance archive helpers
 function appendToAttendanceArchive(record: AttendanceRecord) {
   try {
     if (!fs.existsSync(DATA_DIR)) {
@@ -153,6 +200,18 @@ function appendToAttendanceArchive(record: AttendanceRecord) {
     }
   } catch (err) {
     console.error('Failed to append to attendance archive:', err);
+  }
+}
+
+function rewriteAttendanceArchive(records: AttendanceRecord[]) {
+  try {
+    if (!fs.existsSync(DATA_DIR)) {
+      fs.mkdirSync(DATA_DIR, { recursive: true });
+    }
+    const content = records.map((r) => JSON.stringify(r)).join('\n') + (records.length > 0 ? '\n' : '');
+    fs.writeFileSync(ATTENDANCE_ARCHIVE_FILE, content, 'utf-8');
+  } catch (err) {
+    console.error('Failed to rewrite attendance archive:', err);
   }
 }
 
@@ -1032,7 +1091,8 @@ async function startServer() {
   });
 
   // 1.0 Real-Time Instant Sync-Check for Cross-Device Consistency
-  app.get('/api/sync-check', (req: Request, res: Response) => {
+  app.get('/api/sync-check', async (req: Request, res: Response) => {
+    await syncFromFirestoreIfNewer();
     res.json({
       version: dbVersion,
       lastModified: lastBackupTimestamp,
@@ -1222,7 +1282,8 @@ async function startServer() {
   });
 
   // 3. Departments: List, Add, Update, Delete
-  app.get('/api/departments', (req: Request, res: Response) => {
+  app.get('/api/departments', async (req: Request, res: Response) => {
+    await syncFromFirestoreIfNewer();
     // Augment with active member count
     const departmentsWithCount = db.departments.map((dept) => {
       const count = db.users.filter((u) => u.departmentId === dept.id && u.status === 'active').length;
@@ -1234,70 +1295,97 @@ async function startServer() {
     res.json(departmentsWithCount);
   });
 
-  app.post('/api/departments', (req: Request, res: Response) => {
-    const { id, name, code, color, description, lineNotifyToken, notifyOnCheckIn, notifyOnCheckOut } = req.body;
-    if (!name || !code) {
-      res.status(400).json({ error: 'กรุณาระบุชื่อแผนกและรหัสแผนก' });
-      return;
-    }
+  app.post('/api/departments', async (req: Request, res: Response) => {
+    const { id, name, code, color, description, lineNotifyToken, notifyOnCheckIn, notifyOnCheckOut } = req.body || {};
 
     if (id) {
-      // Update existing
-      const index = db.departments.findIndex((d) => d.id === id);
+      // Update existing (supports partial updates like lineNotifyToken from AdminLineSettings)
+      let index = db.departments.findIndex((d) => d.id === id);
+      if (index === -1) {
+        const fallbackStd = defaultDepartments.find((d) => d.id === id);
+        if (fallbackStd) {
+          db.departments.push({ ...fallbackStd });
+          index = db.departments.length - 1;
+        }
+      }
+
       if (index !== -1) {
+        const existingDept = db.departments[index];
+        const nextName = name !== undefined && String(name).trim() !== '' ? String(name).trim() : existingDept.name;
+        const nextCode = code !== undefined && String(code).trim() !== '' ? String(code).trim().toUpperCase() : existingDept.code;
+
         db.departments[index] = {
-          ...db.departments[index],
-          name: name.trim(),
-          code: code.trim().toUpperCase(),
-          color: color || db.departments[index].color || '#4f46e5',
-          description: description || '',
-          lineNotifyToken: lineNotifyToken !== undefined ? lineNotifyToken.trim() : db.departments[index].lineNotifyToken,
-          notifyOnCheckIn: notifyOnCheckIn !== undefined ? Boolean(notifyOnCheckIn) : true,
-          notifyOnCheckOut: notifyOnCheckOut !== undefined ? Boolean(notifyOnCheckOut) : true,
+          ...existingDept,
+          name: nextName,
+          code: nextCode,
+          color: color !== undefined ? color : existingDept.color || '#4f46e5',
+          description: description !== undefined ? String(description) : existingDept.description || '',
+          lineNotifyToken: lineNotifyToken !== undefined ? String(lineNotifyToken).trim() : existingDept.lineNotifyToken || '',
+          notifyOnCheckIn: notifyOnCheckIn !== undefined ? Boolean(notifyOnCheckIn) : existingDept.notifyOnCheckIn ?? true,
+          notifyOnCheckOut: notifyOnCheckOut !== undefined ? Boolean(notifyOnCheckOut) : existingDept.notifyOnCheckOut ?? true,
         };
 
-        // Also update departmentName in users if name changed
-        db.users.forEach((u) => {
-          if (u.departmentId === id) {
-            u.departmentName = name.trim();
-          }
-        });
+        const touchedUsers: User[] = [];
+        const touchedAttendance: AttendanceRecord[] = [];
 
-        // Also cascade departmentName update to all attendance records
-        db.attendance.forEach((att) => {
-          if (att.departmentId === id) {
-            att.departmentName = name.trim();
-          }
-        });
+        if (nextName !== existingDept.name) {
+          db.users.forEach((u) => {
+            if (u.departmentId === id) {
+              u.departmentName = nextName;
+              touchedUsers.push(u);
+            }
+          });
+          db.attendance.forEach((att) => {
+            if (att.departmentId === id) {
+              att.departmentName = nextName;
+              touchedAttendance.push(att);
+            }
+          });
+        }
 
         saveDatabase(db);
-        appendToAdminJournal({
+        if (touchedAttendance.length > 0) {
+          rewriteAttendanceArchive(db.attendance);
+        }
+        await appendToAdminJournal({
           entity: 'department',
           op: 'update',
           id: db.departments[index].id,
           data: db.departments[index],
           timestamp: new Date().toISOString(),
         });
+        for (const u of touchedUsers) {
+          await firestoreSet('users', u.id, u);
+        }
+        for (const att of touchedAttendance) {
+          await firestoreSet('attendance', att.id, att);
+        }
+
         res.json({ message: 'บันทึกข้อมูลแผนกสำเร็จ', department: db.departments[index] });
         return;
       }
     }
 
+    if (!name || !code) {
+      res.status(400).json({ error: 'กรุณาระบุชื่อแผนกและรหัสแผนก' });
+      return;
+    }
+
     // Add new
     const newDept: Department = {
       id: `dep_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
-      name: name.trim(),
-      code: code.trim().toUpperCase(),
+      name: String(name).trim(),
+      code: String(code).trim().toUpperCase(),
       color: color || '#4f46e5',
       description: description || '',
-      lineNotifyToken: lineNotifyToken?.trim() || '',
+      lineNotifyToken: lineNotifyToken ? String(lineNotifyToken).trim() : '',
       notifyOnCheckIn: notifyOnCheckIn !== undefined ? Boolean(notifyOnCheckIn) : true,
       notifyOnCheckOut: notifyOnCheckOut !== undefined ? Boolean(notifyOnCheckOut) : true,
     };
 
     db.departments.push(newDept);
     saveDatabase(db);
-    appendToAdminJournal({
+    await appendToAdminJournal({
       entity: 'department',
       op: 'create',
       id: newDept.id,
@@ -1307,7 +1395,7 @@ async function startServer() {
     res.status(201).json({ message: 'สร้างแผนกใหม่สำเร็จ', department: newDept });
   });
 
-  app.delete('/api/departments/:id', (req: Request, res: Response) => {
+  app.delete('/api/departments/:id', async (req: Request, res: Response) => {
     const { id } = req.params;
     const count = db.users.filter((u) => u.departmentId === id).length;
     if (count > 0) {
@@ -1319,7 +1407,7 @@ async function startServer() {
 
     db.departments = db.departments.filter((d) => d.id !== id);
     saveDatabase(db);
-    appendToAdminJournal({
+    await appendToAdminJournal({
       entity: 'department',
       op: 'delete',
       id,
@@ -1329,11 +1417,12 @@ async function startServer() {
   });
 
   // ================= WORK LOCATIONS MANAGEMENT (Admin กำหนดตำแหน่งได้เอง) =================
-  app.get('/api/locations', (req: Request, res: Response) => {
+  app.get('/api/locations', async (req: Request, res: Response) => {
+    await syncFromFirestoreIfNewer();
     res.json(db.locations);
   });
 
-  app.post('/api/locations', (req: Request, res: Response) => {
+  app.post('/api/locations', async (req: Request, res: Response) => {
     const {
       id,
       name,
@@ -1344,41 +1433,51 @@ async function startServer() {
       radiusMeters,
       departmentId,
       isActive,
-    } = req.body;
+    } = req.body || {};
 
-    if (!name || latitude === undefined || longitude === undefined) {
+    const existingIndex = id ? db.locations.findIndex((l) => l.id === id) : -1;
+    const existingLoc = existingIndex !== -1 ? db.locations[existingIndex] : undefined;
+
+    if (!existingLoc && (!name || latitude === undefined || longitude === undefined)) {
       res.status(400).json({ error: 'กรุณากรอกชื่อจุดปฏิบัติงาน และพิกัดละติจูด-ลองจิจูด' });
       return;
     }
 
+    const effectiveDeptId = departmentId ?? existingLoc?.departmentId ?? 'all';
     let deptName = 'ทุกแผนก';
-    if (departmentId && departmentId !== 'all') {
-      const dept = db.departments.find((d) => d.id === departmentId);
+    if (effectiveDeptId && effectiveDeptId !== 'all') {
+      const dept = db.departments.find((d) => d.id === effectiveDeptId);
       if (dept) deptName = dept.name;
     }
 
-    if (id) {
+    if (existingLoc) {
       // Update
-      const index = db.locations.findIndex((l) => l.id === id);
+      const index = existingIndex;
       if (index !== -1) {
+        const updatedLocName = name !== undefined ? String(name).trim() : existingLoc.name;
+        const nextLat = latitude !== undefined ? Number(latitude) : existingLoc.latitude;
+        const nextLng = longitude !== undefined ? Number(longitude) : existingLoc.longitude;
         db.locations[index] = {
-          ...db.locations[index],
-          name: String(name).trim(),
-          code: code ? String(code).trim().toUpperCase() : db.locations[index].code,
-          address: address ? String(address).trim() : db.locations[index].address,
-          latitude: Number(latitude),
-          longitude: Number(longitude),
-          radiusMeters: Number(radiusMeters) || db.locations[index].radiusMeters || 200,
-          departmentId: departmentId || db.locations[index].departmentId,
+          ...existingLoc,
+          name: updatedLocName,
+          code: code !== undefined ? String(code).trim().toUpperCase() : existingLoc.code,
+          address: address !== undefined ? String(address).trim() : existingLoc.address,
+          latitude: Number.isFinite(nextLat) ? nextLat : existingLoc.latitude,
+          longitude: Number.isFinite(nextLng) ? nextLng : existingLoc.longitude,
+          radiusMeters: Number(radiusMeters) || existingLoc.radiusMeters || 200,
+          departmentId: effectiveDeptId,
           departmentName: deptName,
-          isActive: isActive !== undefined ? Boolean(isActive) : db.locations[index].isActive,
+          isActive: isActive !== undefined ? Boolean(isActive) : existingLoc.isActive,
         };
 
-        const updatedLocName = String(name).trim();
+        const touchedUsers: User[] = [];
+        const touchedAttendance: AttendanceRecord[] = [];
+
         // Cascade location name update to assigned users
         db.users.forEach((u) => {
           if (u.assignedLocationId === id) {
             u.assignedLocationName = updatedLocName;
+            touchedUsers.push(u);
           }
         });
 
@@ -1387,17 +1486,28 @@ async function startServer() {
           if (att.workLocationId === id) {
             att.locationName = updatedLocName;
             att.workLocationName = updatedLocName;
+            touchedAttendance.push(att);
           }
         });
 
         saveDatabase(db);
-        appendToAdminJournal({
+        if (touchedAttendance.length > 0) {
+          rewriteAttendanceArchive(db.attendance);
+        }
+        await appendToAdminJournal({
           entity: 'location',
           op: 'update',
           id: db.locations[index].id,
           data: db.locations[index],
           timestamp: new Date().toISOString(),
         });
+        for (const u of touchedUsers) {
+          await firestoreSet('users', u.id, u);
+        }
+        for (const att of touchedAttendance) {
+          await firestoreSet('attendance', att.id, att);
+        }
+
         res.json({ message: 'อัปเดตจุดปฏิบัติงานสำเร็จ', location: db.locations[index] });
         return;
       }
@@ -1420,9 +1530,9 @@ async function startServer() {
 
     db.locations.push(newLoc);
     saveDatabase(db);
-    appendToAdminJournal({
+    await appendToAdminJournal({
       entity: 'location',
-      op: 'update',
+      op: 'create',
       id: newLoc.id,
       data: newLoc,
       timestamp: new Date().toISOString(),
@@ -1430,7 +1540,7 @@ async function startServer() {
     res.status(201).json({ message: 'สร้างจุดปฏิบัติงานใหม่สำเร็จ', location: newLoc });
   });
 
-  app.delete('/api/locations/:id', (req: Request, res: Response) => {
+  app.delete('/api/locations/:id', async (req: Request, res: Response) => {
     const { id } = req.params;
     const exists = db.locations.some((l) => l.id === id);
     if (!exists) {
@@ -1439,31 +1549,45 @@ async function startServer() {
     }
 
     db.locations = db.locations.filter((l) => l.id !== id);
+    const touchedUsers: User[] = [];
+    db.users.forEach((u) => {
+      if (u.assignedLocationId === id) {
+        u.assignedLocationId = '';
+        u.assignedLocationName = '';
+        touchedUsers.push(u);
+      }
+    });
+
     saveDatabase(db);
-    appendToAdminJournal({
+    await appendToAdminJournal({
       entity: 'location',
       op: 'delete',
       id,
       timestamp: new Date().toISOString(),
     });
+    for (const u of touchedUsers) {
+      await firestoreSet('users', u.id, u);
+    }
     res.json({ message: 'ลบจุดปฏิบัติงานเรียบร้อยแล้ว' });
   });
 
   // 4. Users Management: List, Create, Update, Delete
-  app.get('/api/users', (req: Request, res: Response) => {
+  app.get('/api/users', async (req: Request, res: Response) => {
+    await syncFromFirestoreIfNewer();
     const safeUsers = db.users.map(({ password, ...u }) => u);
     res.json(safeUsers);
   });
 
   // Admin access to view users with passwords (for distributing account credentials to staff on various devices)
-  app.get('/api/admin/users-with-passwords', (req: Request, res: Response) => {
+  app.get('/api/admin/users-with-passwords', async (req: Request, res: Response) => {
+    await syncFromFirestoreIfNewer();
     res.json(db.users);
   });
 
   // Reset password endpoint
-  app.post('/api/users/:id/reset-password', (req: Request, res: Response) => {
+  app.post('/api/users/:id/reset-password', async (req: Request, res: Response) => {
     const { id } = req.params;
-    const { newPassword } = req.body;
+    const { newPassword } = req.body || {};
     if (!newPassword || String(newPassword).trim() === '') {
       res.status(400).json({ error: 'กรุณากรอกรหัสผ่านใหม่' });
       return;
@@ -1475,17 +1599,17 @@ async function startServer() {
     }
     db.users[userIndex].password = String(newPassword).trim();
     saveDatabase(db);
-    appendToAdminJournal({
+    await appendToAdminJournal({
       entity: 'user',
-      op: 'reset_password',
+      op: 'update',
       id,
-      data: { password: String(newPassword).trim() },
+      data: db.users[userIndex],
       timestamp: new Date().toISOString(),
     });
     res.json({ message: 'เปลี่ยนรหัสผ่านสำเร็จ', username: db.users[userIndex].username });
   });
 
-  app.post('/api/users', (req: Request, res: Response) => {
+  app.post('/api/users', async (req: Request, res: Response) => {
     const {
       username,
       password,
@@ -1497,7 +1621,7 @@ async function startServer() {
       phoneNumber,
       employeeCode,
       status,
-    } = req.body;
+    } = req.body || {};
 
     if (!username || !password || !fullName || !role) {
       res.status(400).json({ error: 'กรุณากรอกข้อมูลที่จำเป็นให้ครบถ้วน (Username, Password, ชื่อ-นามสกุล, สิทธิ์)' });
@@ -1529,8 +1653,8 @@ async function startServer() {
       departmentId: dept ? dept.id : 'dep_general',
       departmentName,
       position: position ? String(position).trim() : '',
-      assignedLocationId: assignedLocationId || undefined,
-      assignedLocationName: assignedLocationName || undefined,
+      assignedLocationId: assignedLocationId || '',
+      assignedLocationName: assignedLocationName || '',
       phoneNumber: phoneNumber ? String(phoneNumber).trim() : '',
       employeeCode: employeeCode ? String(employeeCode).trim() : `EMP-${Math.floor(100 + Math.random() * 900)}`,
       status: status === 'inactive' ? 'inactive' : 'active',
@@ -1539,7 +1663,7 @@ async function startServer() {
 
     db.users.push(newUser);
     saveDatabase(db);
-    appendToAdminJournal({
+    await appendToAdminJournal({
       entity: 'user',
       op: 'create',
       id: newUser.id,
@@ -1618,10 +1742,10 @@ async function startServer() {
     }
 
     saveDatabase(db);
-    dbVersion = Date.now();
     for (const u of touchedUsers) {
       await firestoreSet('users', u.id, u);
     }
+    await firestoreUpdateSyncMeta();
 
     res.json({
       message: `นำเข้าข้อมูลสำเร็จ: เพิ่มใหม่ ${importedCount} รายการ, อัปเดต ${updatedCount} รายการ`,
@@ -1631,9 +1755,10 @@ async function startServer() {
     });
   });
 
-  app.put('/api/users/:id', (req: Request, res: Response) => {
+  app.put('/api/users/:id', async (req: Request, res: Response) => {
     const { id } = req.params;
     const {
+      username,
       fullName,
       password,
       role,
@@ -1643,7 +1768,7 @@ async function startServer() {
       phoneNumber,
       employeeCode,
       status,
-    } = req.body;
+    } = req.body || {};
 
     const userIndex = db.users.findIndex((u) => u.id === id);
     if (userIndex === -1) {
@@ -1652,10 +1777,25 @@ async function startServer() {
     }
 
     const target = db.users[userIndex];
+
+    let nextUsername = target.username;
+    if (username !== undefined && String(username).trim() !== '') {
+      const candidate = String(username).trim().toLowerCase();
+      if (candidate !== target.username.toLowerCase()) {
+        const duplicate = db.users.some((u) => u.id !== id && u.username.toLowerCase() === candidate);
+        if (duplicate) {
+          res.status(400).json({ error: `Username "${candidate}" ถูกใช้งานแล้ว กรุณาเลือกชื่ออื่น` });
+          return;
+        }
+        nextUsername = candidate;
+      }
+    }
+
     let deptName = target.departmentName;
     let deptId = target.departmentId;
     if (departmentId) {
-      const dept = db.departments.find((d) => d.id === departmentId || d.name === departmentId);
+      const dept = db.departments.find((d) => d.id === departmentId || d.name === departmentId) ||
+        defaultDepartments.find((d) => d.id === departmentId || d.name === departmentId);
       if (dept) {
         deptName = dept.name;
         deptId = dept.id;
@@ -1665,32 +1805,37 @@ async function startServer() {
       }
     }
 
-    let assignedLocationName = target.assignedLocationName;
+    let assignedLocationName = target.assignedLocationName || '';
+    let nextAssignedLocationId = target.assignedLocationId || '';
     if (assignedLocationId !== undefined) {
       if (assignedLocationId) {
         const loc = db.locations.find((l) => l.id === assignedLocationId);
+        nextAssignedLocationId = String(assignedLocationId);
         assignedLocationName = loc ? loc.name : '';
       } else {
+        nextAssignedLocationId = '';
         assignedLocationName = '';
       }
     }
 
     db.users[userIndex] = {
       ...target,
+      username: nextUsername,
       fullName: fullName !== undefined ? String(fullName).trim() : target.fullName,
-      password: password ? String(password).trim() : target.password,
+      password: password !== undefined && String(password).trim() !== '' ? String(password).trim() : target.password,
       role: role ? role : target.role,
       departmentId: deptId,
       departmentName: deptName,
       position: position !== undefined ? String(position).trim() : target.position,
-      assignedLocationId: assignedLocationId !== undefined ? (assignedLocationId || undefined) : target.assignedLocationId,
-      assignedLocationName: assignedLocationName || undefined,
+      assignedLocationId: nextAssignedLocationId,
+      assignedLocationName,
       phoneNumber: phoneNumber !== undefined ? String(phoneNumber).trim() : target.phoneNumber,
       employeeCode: employeeCode !== undefined ? String(employeeCode).trim() : target.employeeCode,
       status: status ? status : target.status,
     };
 
     const updatedUser = db.users[userIndex];
+    const touchedAttendance: AttendanceRecord[] = [];
 
     // Cascade user changes (name, role, department) to all attendance records of this user
     db.attendance.forEach((att) => {
@@ -1699,22 +1844,30 @@ async function startServer() {
         att.userRole = updatedUser.role;
         att.departmentId = updatedUser.departmentId;
         att.departmentName = updatedUser.departmentName;
+        touchedAttendance.push(att);
       }
     });
 
     saveDatabase(db);
-    appendToAdminJournal({
+    if (touchedAttendance.length > 0) {
+      rewriteAttendanceArchive(db.attendance);
+    }
+    await appendToAdminJournal({
       entity: 'user',
       op: 'update',
       id: updatedUser.id,
       data: updatedUser,
       timestamp: new Date().toISOString(),
     });
+    for (const att of touchedAttendance) {
+      await firestoreSet('attendance', att.id, att);
+    }
+
     const { password: _, ...safeUser } = db.users[userIndex];
     res.json({ message: 'อัปเดตข้อมูลผู้ใช้งานสำเร็จ', user: safeUser });
   });
 
-  app.delete('/api/users/:id', (req: Request, res: Response) => {
+  app.delete('/api/users/:id', async (req: Request, res: Response) => {
     const { id } = req.params;
     const user = db.users.find((u) => u.id === id);
     if (!user) {
@@ -1729,7 +1882,7 @@ async function startServer() {
 
     db.users = db.users.filter((u) => u.id !== id);
     saveDatabase(db);
-    appendToAdminJournal({
+    await appendToAdminJournal({
       entity: 'user',
       op: 'delete',
       id,
@@ -1739,7 +1892,8 @@ async function startServer() {
   });
 
   // 5. Attendance Management: Check-In / Check-Out
-  app.get('/api/attendance', (req: Request, res: Response) => {
+  app.get('/api/attendance', async (req: Request, res: Response) => {
+    await syncFromFirestoreIfNewer();
     const { userId, departmentId, role, type, startDate, endDate } = req.query;
 
     let results = [...db.attendance];
@@ -2000,9 +2154,25 @@ ${newRecord.note ? `📝 หมายเหตุ/ภารกิจ: ${newRecor
   });
 
   // 7. Attendance Edit & Delete (Admin)
-  app.put('/api/attendance/:id', (req: Request, res: Response) => {
+  app.put('/api/attendance/:id', async (req: Request, res: Response) => {
     const { id } = req.params;
-    const { type, locationName, workLocationId, workLocationName, note, date, time, timestamp, userName, departmentName } = req.body;
+    const {
+      userId,
+      userName,
+      userRole,
+      departmentId,
+      departmentName,
+      type,
+      locationName,
+      workLocationId,
+      workLocationName,
+      latitude,
+      longitude,
+      note,
+      date,
+      time,
+      timestamp,
+    } = req.body || {};
 
     const index = db.attendance.findIndex((r) => r.id === id);
     if (index === -1) {
@@ -2011,28 +2181,100 @@ ${newRecord.note ? `📝 หมายเหตุ/ภารกิจ: ${newRecor
     }
 
     const current = db.attendance[index];
+
+    let nextUserId = userId !== undefined ? String(userId) : current.userId;
+    let nextUserName = userName !== undefined ? String(userName).trim() : current.userName;
+    let nextUserRole = userRole !== undefined ? userRole : current.userRole;
+    let nextDeptId = departmentId !== undefined ? String(departmentId) : current.departmentId;
+    let nextDeptName = departmentName !== undefined ? String(departmentName).trim() : current.departmentName;
+
+    if (userId !== undefined && userId !== current.userId) {
+      const targetUser = db.users.find((u) => u.id === userId);
+      if (targetUser) {
+        nextUserId = targetUser.id;
+        if (userName === undefined) nextUserName = targetUser.fullName;
+        if (userRole === undefined) nextUserRole = targetUser.role;
+        if (departmentId === undefined) nextDeptId = targetUser.departmentId;
+        if (departmentName === undefined) nextDeptName = targetUser.departmentName;
+      }
+    }
+
+    if (departmentId !== undefined && departmentName === undefined) {
+      const dept = db.departments.find((d) => d.id === departmentId) || defaultDepartments.find((d) => d.id === departmentId);
+      if (dept) nextDeptName = dept.name;
+    }
+
+    const nextDate = date !== undefined ? String(date).trim() : current.date;
+    const rawTime = time !== undefined ? String(time).trim() : current.time;
+    const normalizedTime = /^\d{2}:\d{2}$/.test(rawTime) ? `${rawTime}:00` : rawTime;
+
+    let nextTimestamp = current.timestamp;
+    if (timestamp !== undefined) {
+      nextTimestamp = String(timestamp);
+    } else if (date !== undefined || time !== undefined) {
+      const parsed = new Date(`${nextDate}T${normalizedTime}+07:00`);
+      if (!Number.isNaN(parsed.getTime())) {
+        nextTimestamp = parsed.toISOString();
+      }
+    }
+
+    let nextWorkLocationId = workLocationId !== undefined ? workLocationId : current.workLocationId;
+    let nextWorkLocationName = workLocationName !== undefined ? workLocationName : current.workLocationName;
+    let nextLocationName = locationName !== undefined ? String(locationName).trim() : current.locationName;
+
+    if (workLocationId !== undefined && workLocationId !== current.workLocationId) {
+      const loc = db.locations.find((l) => l.id === workLocationId);
+      if (loc) {
+        nextWorkLocationName = loc.name;
+        if (locationName === undefined) nextLocationName = loc.name;
+      } else if (!workLocationId) {
+        nextWorkLocationId = '';
+        nextWorkLocationName = '';
+      }
+    }
+
+    const nextLat = latitude !== undefined && !Number.isNaN(Number(latitude)) ? Number(latitude) : current.latitude;
+    const nextLng = longitude !== undefined && !Number.isNaN(Number(longitude)) ? Number(longitude) : current.longitude;
+
+    let nextIsWithinGeofence = current.isWithinGeofence;
+    let nextDistance = current.distanceFromLocationMeters;
+    const matchedLoc = nextWorkLocationId ? db.locations.find((l) => l.id === nextWorkLocationId) : undefined;
+    if (matchedLoc) {
+      nextDistance = calculateDistanceMeters(nextLat, nextLng, matchedLoc.latitude, matchedLoc.longitude);
+      nextIsWithinGeofence = nextDistance <= (matchedLoc.radiusMeters || 200);
+    }
+
     db.attendance[index] = {
       ...current,
+      userId: nextUserId,
+      userName: nextUserName,
+      userRole: nextUserRole,
+      departmentId: nextDeptId,
+      departmentName: nextDeptName,
       type: type !== undefined ? (type === 'check_out' ? 'check_out' : 'check_in') : current.type,
-      locationName: locationName !== undefined ? String(locationName).trim() : current.locationName,
-      workLocationId: workLocationId !== undefined ? workLocationId : current.workLocationId,
-      workLocationName: workLocationName !== undefined ? workLocationName : current.workLocationName,
+      locationName: nextLocationName,
+      workLocationId: nextWorkLocationId,
+      workLocationName: nextWorkLocationName,
+      latitude: nextLat,
+      longitude: nextLng,
+      isWithinGeofence: nextIsWithinGeofence,
+      distanceFromLocationMeters: nextDistance,
       note: note !== undefined ? String(note).trim() : current.note,
-      date: date !== undefined ? String(date).trim() : current.date,
-      time: time !== undefined ? String(time).trim() : current.time,
-      timestamp: timestamp !== undefined ? String(timestamp) : current.timestamp,
-      userName: userName !== undefined ? String(userName).trim() : current.userName,
-      departmentName: departmentName !== undefined ? String(departmentName).trim() : current.departmentName,
+      date: nextDate,
+      time: normalizedTime,
+      timestamp: nextTimestamp,
     };
 
     saveDatabase(db);
+    rewriteAttendanceArchive(db.attendance);
     if (firestoreDb) {
-      firestoreSet('attendance', db.attendance[index].id, db.attendance[index]);
+      await firestoreSet('attendance', db.attendance[index].id, db.attendance[index]);
+      await firestoreUpdateSyncMeta();
     }
     res.json({ message: 'แก้ไขรายการลงเวลาสำเร็จ', record: db.attendance[index] });
   });
 
-  app.delete('/api/attendance/:id', (req: Request, res: Response) => {
+  app.delete('/api/attendance/:id', async (req: Request, res: Response) => {
     const { id } = req.params;
     const initialLen = db.attendance.length;
     db.attendance = db.attendance.filter((r) => r.id !== id);
@@ -2041,16 +2283,25 @@ ${newRecord.note ? `📝 หมายเหตุ/ภารกิจ: ${newRecor
       return;
     }
     saveDatabase(db);
+    rewriteAttendanceArchive(db.attendance);
     if (firestoreDb) {
-      firestoreDelete('attendance', id);
+      await firestoreDelete('attendance', id);
+      await firestoreUpdateSyncMeta();
     }
     res.json({ message: 'ลบรายการลงเวลาเรียบร้อยแล้ว' });
   });
 
   // Dedicated Attendance Protection & Disaster Prevention Endpoints
-  app.post('/api/attendance/clean-demo', (req: Request, res: Response) => {
+  app.post('/api/attendance/clean-demo', async (req: Request, res: Response) => {
     try {
       const initialCount = db.attendance.length;
+      const toRemove = db.attendance.filter(
+        (r) =>
+          r.userId === 'usr_somchai' ||
+          (r.userName && r.userName.includes('สมชาย')) ||
+          r.id === 'att_1793678354265_gye2' ||
+          r.id === 'att_1791596015445_jm7c'
+      );
       db.attendance = db.attendance.filter(
         (r) =>
           r.userId !== 'usr_somchai' &&
@@ -2060,24 +2311,13 @@ ${newRecord.note ? `📝 หมายเหตุ/ภารกิจ: ${newRecor
       );
       const removedCount = initialCount - db.attendance.length;
       saveDatabase(db);
+      rewriteAttendanceArchive(db.attendance);
 
-      // Clean archive file as well
-      try {
-        const archive = loadAttendanceArchive();
-        const cleanArchive = archive.filter(
-          (r) =>
-            r.userId !== 'usr_somchai' &&
-            !(r.userName && r.userName.includes('สมชาย')) &&
-            r.id !== 'att_1793678354265_gye2' &&
-            r.id !== 'att_1791596015445_jm7c'
-        );
-        fs.writeFileSync(
-          ATTENDANCE_ARCHIVE_FILE,
-          cleanArchive.map((r) => JSON.stringify(r)).join('\n') + (cleanArchive.length > 0 ? '\n' : ''),
-          'utf-8'
-        );
-      } catch (archErr) {
-        console.warn('Archive cleanup warning:', archErr);
+      if (firestoreDb) {
+        for (const rem of toRemove) {
+          await firestoreDelete('attendance', rem.id);
+        }
+        await firestoreUpdateSyncMeta();
       }
 
       res.json({
@@ -2133,7 +2373,7 @@ ${newRecord.note ? `📝 หมายเหตุ/ภารกิจ: ${newRecor
     }
   });
 
-  app.post('/api/attendance/restore', (req: Request, res: Response) => {
+  app.post('/api/attendance/restore', async (req: Request, res: Response) => {
     try {
       const { records } = req.body;
       if (!Array.isArray(records)) {
@@ -2143,6 +2383,7 @@ ${newRecord.note ? `📝 หมายเหตุ/ภารกิจ: ${newRecor
 
       let restoredCount = 0;
       const existingIds = new Set(db.attendance.map((r) => r.id));
+      const newlyRestored: AttendanceRecord[] = [];
 
       for (const r of records) {
         if (r && r.id && !existingIds.has(r.id)) {
@@ -2152,7 +2393,7 @@ ${newRecord.note ? `📝 หมายเหตุ/ภารกิจ: ${newRecor
           }
           db.attendance.push(r);
           existingIds.add(r.id);
-          appendToAttendanceArchive(r);
+          newlyRestored.push(r);
           restoredCount++;
         }
       }
@@ -2160,6 +2401,14 @@ ${newRecord.note ? `📝 หมายเหตุ/ภารกิจ: ${newRecor
       // Sort descending by timestamp
       db.attendance.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
       saveDatabase(db);
+      rewriteAttendanceArchive(db.attendance);
+
+      if (firestoreDb) {
+        for (const rec of newlyRestored) {
+          await firestoreSet('attendance', rec.id, rec);
+        }
+        await firestoreUpdateSyncMeta();
+      }
 
       res.json({
         message: `กู้คืนข้อมูลสำเร็จ ${restoredCount} รายการ`,
@@ -2182,33 +2431,39 @@ ${newRecord.note ? `📝 หมายเหตุ/ภารกิจ: ${newRecor
     }
   });
 
-  app.delete('/api/attendance/all', (req: Request, res: Response) => {
+  app.delete('/api/attendance/all', async (req: Request, res: Response) => {
     const { confirmation } = req.body || {};
     if (confirmation !== 'CLEAR_ALL_ATTENDANCE') {
       res.status(400).json({ error: 'ต้องยืนยันการลบด้วยคำว่า CLEAR_ALL_ATTENDANCE' });
       return;
     }
-    const count = db.attendance.length;
+    const deletedIds = db.attendance.map((r) => r.id);
+    const count = deletedIds.length;
     db.attendance = [];
     saveDatabase(db);
-    try {
-      fs.writeFileSync(ATTENDANCE_ARCHIVE_FILE, '', 'utf-8');
-    } catch {}
+    rewriteAttendanceArchive([]);
+    if (firestoreDb) {
+      for (const attId of deletedIds) {
+        await firestoreDelete('attendance', attId);
+      }
+      await firestoreUpdateSyncMeta();
+    }
     res.json({ message: 'ลบประวัติการลงเวลาทั้งหมดเรียบร้อยแล้ว', clearedCount: count });
   });
 
   // 8. System Settings
-  app.get('/api/settings', (req: Request, res: Response) => {
+  app.get('/api/settings', async (req: Request, res: Response) => {
+    await syncFromFirestoreIfNewer();
     res.json(db.settings);
   });
 
-  app.post('/api/settings', (req: Request, res: Response) => {
+  app.post('/api/settings', async (req: Request, res: Response) => {
     db.settings = {
       ...db.settings,
       ...req.body,
     };
     saveDatabase(db);
-    appendToAdminJournal({
+    await appendToAdminJournal({
       entity: 'settings',
       op: 'update',
       data: db.settings,

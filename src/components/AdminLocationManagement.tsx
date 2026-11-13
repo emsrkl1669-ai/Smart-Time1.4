@@ -39,6 +39,9 @@ export const AdminLocationManagement: React.FC<AdminLocationManagementProps> = (
   const [isLoading, setIsLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [isGettingGps, setIsGettingGps] = useState(false);
+  const [deleteConfirmLoc, setDeleteConfirmLoc] = useState<WorkLocation | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
+  const [toastMsg, setToastMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
   // Search Address State
   const [addressSearchQuery, setAddressSearchQuery] = useState('');
@@ -56,6 +59,8 @@ export const AdminLocationManagement: React.FC<AdminLocationManagementProps> = (
     departmentId: 'all',
     isActive: true,
   });
+  const [latInput, setLatInput] = useState('13.5781067');
+  const [lngInput, setLngInput] = useState('100.594069');
 
   const filteredLocations = locations.filter((loc) => {
     const matchesSearch =
@@ -79,6 +84,8 @@ export const AdminLocationManagement: React.FC<AdminLocationManagementProps> = (
       departmentId: 'all',
       isActive: true,
     });
+    setLatInput('13.5781067');
+    setLngInput('100.594069');
     setSearchResults([]);
     setAddressSearchQuery('');
     setErrorMsg(null);
@@ -98,6 +105,8 @@ export const AdminLocationManagement: React.FC<AdminLocationManagementProps> = (
       departmentId: loc.departmentId || 'all',
       isActive: loc.isActive !== undefined ? loc.isActive : true,
     });
+    setLatInput(String(loc.latitude));
+    setLngInput(String(loc.longitude));
     setSearchResults([]);
     setAddressSearchQuery('');
     setErrorMsg(null);
@@ -107,22 +116,27 @@ export const AdminLocationManagement: React.FC<AdminLocationManagementProps> = (
   // Get current device GPS coordinates
   const handleGetCurrentGps = () => {
     if (!navigator.geolocation) {
-      alert('อุปกรณ์ของคุณไม่รองรับการดึงพิกัด GPS');
+      setErrorMsg('อุปกรณ์ของคุณไม่รองรับการดึงพิกัด GPS');
       return;
     }
     setIsGettingGps(true);
+    setErrorMsg(null);
     navigator.geolocation.getCurrentPosition(
       (pos) => {
+        const lat = Number(pos.coords.latitude.toFixed(6));
+        const lng = Number(pos.coords.longitude.toFixed(6));
         setFormData((prev) => ({
           ...prev,
-          latitude: Number(pos.coords.latitude.toFixed(6)),
-          longitude: Number(pos.coords.longitude.toFixed(6)),
+          latitude: lat,
+          longitude: lng,
         }));
+        setLatInput(String(lat));
+        setLngInput(String(lng));
         setIsGettingGps(false);
       },
       (err) => {
         console.warn('Geolocation error:', err);
-        alert('ไม่สามารถรับสัญญาณ GPS ได้ในขณะนี้ กรุณากรอกพิกัดด้วยตนเอง');
+        setErrorMsg('ไม่สามารถรับสัญญาณ GPS ได้ในขณะนี้ กรุณากรอกพิกัดด้วยตนเอง');
         setIsGettingGps(false);
       },
       { enableHighAccuracy: true, timeout: 8000 }
@@ -161,6 +175,8 @@ export const AdminLocationManagement: React.FC<AdminLocationManagementProps> = (
       latitude: lat,
       longitude: lon,
     }));
+    setLatInput(String(lat));
+    setLngInput(String(lon));
     setSearchResults([]);
   };
 
@@ -171,16 +187,29 @@ export const AdminLocationManagement: React.FC<AdminLocationManagementProps> = (
       setErrorMsg('กรุณากรอกชื่อจุดปฏิบัติงาน');
       return;
     }
+    const parsedLat = Number(latInput);
+    const parsedLng = Number(lngInput);
+    if (!Number.isFinite(parsedLat) || !Number.isFinite(parsedLng)) {
+      setErrorMsg('กรุณากรอกค่าละติจูดและลองจิจูดให้ถูกต้อง');
+      return;
+    }
 
     setIsLoading(true);
     setErrorMsg(null);
 
     try {
-      await api.saveLocation({
+      const saved = await api.saveLocation({
         id: editingLocation ? editingLocation.id : undefined,
         ...formData,
+        latitude: parsedLat,
+        longitude: parsedLng,
       });
       setIsModalOpen(false);
+      setToastMsg({
+        type: 'success',
+        text: `${editingLocation ? 'บันทึกการแก้ไขจุด' : 'เพิ่มจุดปฏิบัติงาน'} "${saved.name}" เรียบร้อยแล้ว`,
+      });
+      setTimeout(() => setToastMsg(null), 4000);
       onRefresh();
     } catch (err: any) {
       setErrorMsg(err.message || 'บันทึกข้อมูลไม่สำเร็จ');
@@ -190,18 +219,52 @@ export const AdminLocationManagement: React.FC<AdminLocationManagementProps> = (
   };
 
   // Delete Location
-  const handleDeleteLocation = async (loc: WorkLocation) => {
-    if (!window.confirm(`คุณแน่ใจหรือไม่ว่าต้องการลบจุดปฏิบัติงาน "${loc.name}"?`)) return;
+  const confirmDeleteLocation = async () => {
+    if (!deleteConfirmLoc) return;
+    setIsDeleting(true);
     try {
-      await api.deleteLocation(loc.id);
+      const targetName = deleteConfirmLoc.name;
+      await api.deleteLocation(deleteConfirmLoc.id);
+      setDeleteConfirmLoc(null);
+      setToastMsg({ type: 'success', text: `ลบจุดปฏิบัติงาน "${targetName}" เรียบร้อยแล้ว` });
+      setTimeout(() => setToastMsg(null), 4000);
       onRefresh();
     } catch (err: any) {
-      alert(err.message || 'ไม่สามารถลบจุดปฏิบัติงานได้');
+      setDeleteConfirmLoc(null);
+      setToastMsg({ type: 'error', text: err.message || 'ไม่สามารถลบจุดปฏิบัติงานได้' });
+    } finally {
+      setIsDeleting(false);
     }
   };
 
   return (
     <div className="space-y-5">
+      {toastMsg && (
+        <div
+          className={`p-3.5 rounded-2xl border text-xs font-semibold flex items-center justify-between gap-2 ${
+            toastMsg.type === 'success'
+              ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
+              : 'bg-rose-50 border-rose-200 text-rose-800'
+          }`}
+        >
+          <div className="flex items-center gap-2">
+            {toastMsg.type === 'success' ? (
+              <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+            ) : (
+              <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
+            )}
+            <span>{toastMsg.text}</span>
+          </div>
+          <button
+            type="button"
+            onClick={() => setToastMsg(null)}
+            className="text-slate-400 hover:text-slate-600 p-0.5 cursor-pointer"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      )}
+
       {/* Top Header Card */}
       <div className="bg-white p-5 rounded-2xl border border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-4 shadow-xs">
         <div>
@@ -314,8 +377,8 @@ export const AdminLocationManagement: React.FC<AdminLocationManagementProps> = (
                     </button>
                     <button
                       type="button"
-                      onClick={() => handleDeleteLocation(loc)}
-                      className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition"
+                      onClick={() => setDeleteConfirmLoc(loc)}
+                      className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition cursor-pointer"
                       title="ลบจุดปฏิบัติงาน"
                     >
                       <Trash2 className="w-4 h-4" />
@@ -543,10 +606,17 @@ export const AdminLocationManagement: React.FC<AdminLocationManagementProps> = (
                   </label>
                   <input
                     type="number"
-                    step="0.000001"
+                    step="any"
                     required
-                    value={formData.latitude}
-                    onChange={(e) => setFormData({ ...formData, latitude: parseFloat(e.target.value) || 0 })}
+                    value={latInput}
+                    onChange={(e) => {
+                      const v = e.target.value;
+                      setLatInput(v);
+                      const num = parseFloat(v);
+                      if (Number.isFinite(num)) {
+                        setFormData((prev) => ({ ...prev, latitude: num }));
+                      }
+                    }}
                     className="w-full text-xs sm:text-sm p-2.5 rounded-xl border border-slate-200 font-mono focus:ring-2 focus:ring-indigo-500 focus:outline-none"
                   />
                 </div>
@@ -557,10 +627,17 @@ export const AdminLocationManagement: React.FC<AdminLocationManagementProps> = (
                   </label>
                   <input
                     type="number"
-                    step="0.000001"
+                    step="any"
                     required
-                    value={formData.longitude}
-                    onChange={(e) => setFormData({ ...formData, longitude: parseFloat(e.target.value) || 0 })}
+                    value={lngInput}
+                    onChange={(e) => {
+                      const v = e.target.value;
+                      setLngInput(v);
+                      const num = parseFloat(v);
+                      if (Number.isFinite(num)) {
+                        setFormData((prev) => ({ ...prev, longitude: num }));
+                      }
+                    }}
                     className="w-full text-xs sm:text-sm p-2.5 rounded-xl border border-slate-200 font-mono focus:ring-2 focus:ring-indigo-500 focus:outline-none"
                   />
                 </div>
@@ -615,6 +692,42 @@ export const AdminLocationManagement: React.FC<AdminLocationManagementProps> = (
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+      {/* MODAL: CONFIRM DELETE WORK LOCATION */}
+      {deleteConfirmLoc && (
+        <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl max-w-sm w-full p-5 shadow-2xl space-y-4">
+            <div className="flex items-start gap-3">
+              <div className="p-2.5 bg-rose-100 text-rose-600 rounded-xl shrink-0">
+                <Trash2 className="w-5 h-5" />
+              </div>
+              <div>
+                <h4 className="font-bold text-slate-800 text-sm">ยืนยันการลบจุดปฏิบัติงาน</h4>
+                <p className="text-xs text-slate-600 mt-1">
+                  ต้องการลบจุด "{deleteConfirmLoc.name}" ออกจากระบบใช่หรือไม่? ผู้ใช้งานที่เคยผูกจุดนี้จะถูกปลดการผูกจุดให้อัตโนมัติ
+                </p>
+              </div>
+            </div>
+            <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100">
+              <button
+                type="button"
+                onClick={() => setDeleteConfirmLoc(null)}
+                disabled={isDeleting}
+                className="px-4 py-2 text-xs font-semibold text-slate-600 bg-slate-100 hover:bg-slate-200 rounded-xl cursor-pointer"
+              >
+                ยกเลิก
+              </button>
+              <button
+                type="button"
+                onClick={confirmDeleteLocation}
+                disabled={isDeleting}
+                className="px-4 py-2 text-xs font-bold text-white bg-rose-600 hover:bg-rose-700 rounded-xl cursor-pointer disabled:opacity-50"
+              >
+                {isDeleting ? 'กำลังลบ...' : 'ยืนยันการลบ'}
+              </button>
+            </div>
           </div>
         </div>
       )}

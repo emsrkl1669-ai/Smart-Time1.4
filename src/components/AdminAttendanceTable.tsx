@@ -80,13 +80,26 @@ export const AdminAttendanceTable: React.FC<AdminAttendanceTableProps> = ({
   // Edit attendance record
   const [editingRecord, setEditingRecord] = useState<AttendanceRecord | null>(null);
   const [editForm, setEditForm] = useState({
+    userId: '',
+    departmentId: '',
     type: 'check_in' as 'check_in' | 'check_out',
     date: '',
     time: '',
+    workLocationId: '',
     locationName: '',
+    latitude: '',
+    longitude: '',
     note: '',
   });
   const [isSavingEdit, setIsSavingEdit] = useState(false);
+  const [editError, setEditError] = useState<string | null>(null);
+  const [manualError, setManualError] = useState<string | null>(null);
+  const [restoreError, setRestoreError] = useState<string | null>(null);
+  const [confirmAction, setConfirmAction] = useState<{
+    type: 'delete' | 'clean_demo';
+    record?: AttendanceRecord;
+  } | null>(null);
+  const [isConfirmingAction, setIsConfirmingAction] = useState(false);
 
   // Manual Attendance Record Modal (Admin records for employee or volunteer)
   const [showManualModal, setShowManualModal] = useState(false);
@@ -112,19 +125,21 @@ export const AdminAttendanceTable: React.FC<AdminAttendanceTableProps> = ({
       customLocationName: '',
       note: '',
     });
+    setManualError(null);
     setShowManualModal(true);
   };
 
   const handleManualAttendanceSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    setManualError(null);
     if (!manualForm.userId) {
-      alert('กรุณาเลือกบุคลากร (พนักงาน หรือ อาสาสมัคร)');
+      setManualError('กรุณาเลือกบุคลากร (พนักงาน หรือ อาสาสมัคร)');
       return;
     }
 
     const targetUser = users.find((u) => u.id === manualForm.userId);
     if (!targetUser) {
-      alert('ไม่พบข้อมูลบุคลากรที่เลือก');
+      setManualError('ไม่พบข้อมูลบุคลากรที่เลือก');
       return;
     }
 
@@ -157,7 +172,7 @@ export const AdminAttendanceTable: React.FC<AdminAttendanceTableProps> = ({
       onRefresh();
       setTimeout(() => setFeedbackToast(null), 4000);
     } catch (err: any) {
-      alert('เกิดข้อผิดพลาดในการบันทึกเวลา: ' + (err?.message || 'ไม่สำเร็จ'));
+      setManualError('เกิดข้อผิดพลาดในการบันทึกเวลา: ' + (err?.message || 'ไม่สำเร็จ'));
     } finally {
       setIsSubmittingManual(false);
     }
@@ -200,25 +215,23 @@ export const AdminAttendanceTable: React.FC<AdminAttendanceTableProps> = ({
     return matchesSearch && matchesRole && matchesDept && matchesType && matchesDate;
   });
 
-  const handleDelete = async (record: AttendanceRecord) => {
-    const ok = window.confirm(`คุณแน่ใจหรือไม่ว่าต้องการลบรายการลงเวลาของ "${record.userName}" วันที่ ${record.date} ${record.time}?`);
-    if (!ok) return;
-
-    try {
-      await api.deleteAttendance(record.id);
-      onRefresh();
-    } catch (e: any) {
-      alert(e.message || 'ลบไม่สำเร็จ');
-    }
+  const handleDelete = (record: AttendanceRecord) => {
+    setConfirmAction({ type: 'delete', record });
   };
 
   const handleOpenEdit = (rec: AttendanceRecord) => {
     setEditingRecord(rec);
+    setEditError(null);
     setEditForm({
+      userId: rec.userId,
+      departmentId: rec.departmentId,
       type: rec.type,
       date: rec.date,
       time: rec.time,
+      workLocationId: rec.workLocationId || '',
       locationName: rec.locationName,
+      latitude: rec.latitude !== undefined ? String(rec.latitude) : '',
+      longitude: rec.longitude !== undefined ? String(rec.longitude) : '',
       note: rec.note || '',
     });
   };
@@ -227,38 +240,77 @@ export const AdminAttendanceTable: React.FC<AdminAttendanceTableProps> = ({
     e.preventDefault();
     if (!editingRecord) return;
     setIsSavingEdit(true);
+    setEditError(null);
     try {
-      await api.updateAttendance(editingRecord.id, editForm);
+      const updates: Partial<AttendanceRecord> = {
+        userId: editForm.userId,
+        departmentId: editForm.departmentId,
+        type: editForm.type,
+        date: editForm.date,
+        time: editForm.time,
+        workLocationId: editForm.workLocationId,
+        locationName: editForm.locationName.trim(),
+        note: editForm.note,
+      };
+      const parsedLat = parseFloat(editForm.latitude);
+      const parsedLng = parseFloat(editForm.longitude);
+      if (Number.isFinite(parsedLat) && Number.isFinite(parsedLng)) {
+        updates.latitude = parsedLat;
+        updates.longitude = parsedLng;
+      }
+
+      const updated = await api.updateAttendance(editingRecord.id, updates);
       setEditingRecord(null);
+      setFeedbackToast({
+        type: 'success',
+        message: `แก้ไขข้อมูลการลงเวลาของ "${updated.userName}" เรียบร้อยแล้ว`,
+      });
+      setTimeout(() => setFeedbackToast(null), 4000);
       onRefresh();
     } catch (err: any) {
-      alert(err.message || 'แก้ไขข้อมูลไม่สำเร็จ');
+      setEditError(err?.message || 'แก้ไขข้อมูลไม่สำเร็จ');
     } finally {
       setIsSavingEdit(false);
     }
   };
 
-  const handleCleanDemoData = async () => {
-    const ok = window.confirm(
-      'ยืนยันการลบข้อมูลตัวอย่าง/ทดสอบทั้งหมด (ระบบจะลบเฉพาะรายการทดสอบ เช่น "สมชาย ใจดี" หรือ mock log เก่า และคงข้อมูลจริงไว้ทั้งหมด)?'
-    );
-    if (!ok) return;
+  const handleCleanDemoData = () => {
+    setConfirmAction({ type: 'clean_demo' });
+  };
 
-    setIsCleaningDemo(true);
+  const executeConfirmAction = async () => {
+    if (!confirmAction) return;
+    setIsConfirmingAction(true);
     try {
-      const res = await api.cleanDemoAttendance();
-      setFeedbackToast({
-        type: 'success',
-        message: `${res.message} ระบบพร้อมบันทึกประวัติเวลาจริง`,
-      });
-      onRefresh();
-      setTimeout(() => setFeedbackToast(null), 4500);
+      if (confirmAction.type === 'delete' && confirmAction.record) {
+        const rec = confirmAction.record;
+        await api.deleteAttendance(rec.id);
+        setConfirmAction(null);
+        setFeedbackToast({
+          type: 'success',
+          message: `ลบรายการลงเวลาของ "${rec.userName}" เรียบร้อยแล้ว`,
+        });
+        onRefresh();
+        setTimeout(() => setFeedbackToast(null), 4000);
+      } else if (confirmAction.type === 'clean_demo') {
+        setIsCleaningDemo(true);
+        const res = await api.cleanDemoAttendance();
+        setConfirmAction(null);
+        setFeedbackToast({
+          type: 'success',
+          message: `${res.message} ระบบพร้อมบันทึกประวัติเวลาจริง`,
+        });
+        onRefresh();
+        setTimeout(() => setFeedbackToast(null), 4500);
+      }
     } catch (err: any) {
+      setConfirmAction(null);
       setFeedbackToast({
         type: 'error',
-        message: err.message || 'ไม่สามารถลบข้อมูลตัวอย่างได้',
+        message: err?.message || 'ดำเนินการไม่สำเร็จ',
       });
     } finally {
+      setIsConfirmingAction(false);
       setIsCleaningDemo(false);
     }
   };
@@ -344,6 +396,7 @@ export const AdminAttendanceTable: React.FC<AdminAttendanceTableProps> = ({
     if (!restoreJsonInput.trim()) return;
 
     setIsRestoring(true);
+    setRestoreError(null);
     try {
       let parsed = JSON.parse(restoreJsonInput);
       if (!Array.isArray(parsed) && parsed.records && Array.isArray(parsed.records)) {
@@ -363,7 +416,7 @@ export const AdminAttendanceTable: React.FC<AdminAttendanceTableProps> = ({
       onRefresh();
       setTimeout(() => setFeedbackToast(null), 4500);
     } catch (err: any) {
-      alert('เกิดข้อผิดพลาดในการกู้คืน: ' + err.message);
+      setRestoreError('เกิดข้อผิดพลาดในการกู้คืน: ' + (err?.message || 'ไม่สำเร็จ'));
     } finally {
       setIsRestoring(false);
     }
@@ -1241,6 +1294,14 @@ export const AdminAttendanceTable: React.FC<AdminAttendanceTableProps> = ({
                 />
               </div>
 
+              {/* Error banner */}
+              {manualError && (
+                <div className="p-2.5 bg-rose-50 border border-rose-200 rounded-xl flex items-center gap-2 text-xs text-rose-700">
+                  <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0" />
+                  <span>{manualError}</span>
+                </div>
+              )}
+
               {/* Safety notice banner */}
               <div className="p-2.5 bg-emerald-50 border border-emerald-200 rounded-xl flex items-center gap-2 text-[11px] text-emerald-800">
                 <ShieldCheck className="w-4 h-4 text-emerald-600 shrink-0" />
@@ -1272,15 +1333,15 @@ export const AdminAttendanceTable: React.FC<AdminAttendanceTableProps> = ({
 
       {/* Modal: Edit Attendance Record (Admin) */}
       {editingRecord && (
-        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white rounded-3xl max-w-md w-full overflow-hidden shadow-2xl relative">
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-xs flex items-center justify-center p-4 overflow-y-auto">
+          <div className="bg-white rounded-3xl max-w-lg w-full overflow-hidden shadow-2xl relative">
             <div className="p-4 flex items-center justify-between border-b border-slate-100 bg-slate-50">
               <div>
                 <h4 className="text-sm font-bold text-slate-800">
                   แก้ไขข้อมูลการลงเวลา: {editingRecord.userName}
                 </h4>
                 <p className="text-[11px] text-slate-500">
-                  {editingRecord.departmentName} • ID: {editingRecord.id}
+                  ID: {editingRecord.id} • แก้ไขได้ทุกฟิลด์โดย Admin
                 </p>
               </div>
               <button
@@ -1292,7 +1353,59 @@ export const AdminAttendanceTable: React.FC<AdminAttendanceTableProps> = ({
               </button>
             </div>
 
-            <form onSubmit={handleSaveEdit} className="p-5 space-y-4">
+            <form onSubmit={handleSaveEdit} className="p-5 space-y-4 max-h-[82vh] overflow-y-auto">
+              {editError && (
+                <div className="p-3 bg-rose-50 border border-rose-200 text-rose-700 text-xs rounded-xl flex items-center gap-2">
+                  <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0" />
+                  <span>{editError}</span>
+                </div>
+              )}
+
+              {/* User & Department */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    บุคลากร (พนักงาน / อาสา)
+                  </label>
+                  <select
+                    value={editForm.userId}
+                    onChange={(e) => {
+                      const nextUid = e.target.value;
+                      const matched = users.find((u) => u.id === nextUid);
+                      setEditForm((prev) => ({
+                        ...prev,
+                        userId: nextUid,
+                        departmentId: matched?.departmentId || prev.departmentId,
+                      }));
+                    }}
+                    className="w-full px-3 py-2 text-xs border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none bg-white"
+                  >
+                    {users.map((u) => (
+                      <option key={u.id} value={u.id}>
+                        {u.fullName} ({u.role === 'volunteer' ? 'อาสา' : u.role === 'admin' ? 'Admin' : 'พนักงาน'})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    กลุ่ม / แผนก
+                  </label>
+                  <select
+                    value={editForm.departmentId}
+                    onChange={(e) => setEditForm((prev) => ({ ...prev, departmentId: e.target.value }))}
+                    className="w-full px-3 py-2 text-xs border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none bg-white"
+                  >
+                    {departments.map((d) => (
+                      <option key={d.id} value={d.id}>
+                        {d.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
               {/* Type */}
               <div>
                 <label className="block text-xs font-semibold text-slate-700 mb-1">
@@ -1352,10 +1465,39 @@ export const AdminAttendanceTable: React.FC<AdminAttendanceTableProps> = ({
                 </div>
               </div>
 
-              {/* Location Name */}
+              {/* Assigned Work Location */}
               <div>
                 <label className="block text-xs font-semibold text-slate-700 mb-1">
-                  สถานที่ / จุดปฏิบัติงาน
+                  จุดปฏิบัติงานที่กำหนด (Work Location)
+                </label>
+                <select
+                  value={editForm.workLocationId}
+                  onChange={(e) => {
+                    const nextLocId = e.target.value;
+                    const matched = workLocations.find((l) => l.id === nextLocId);
+                    setEditForm((prev) => ({
+                      ...prev,
+                      workLocationId: nextLocId,
+                      locationName: matched ? matched.name : prev.locationName,
+                      latitude: matched ? String(matched.latitude) : prev.latitude,
+                      longitude: matched ? String(matched.longitude) : prev.longitude,
+                    }));
+                  }}
+                  className="w-full px-3 py-2 text-xs border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none bg-white"
+                >
+                  <option value="">ระบุสถานที่อิสระ / นอกสถานที่</option>
+                  {workLocations.map((loc) => (
+                    <option key={loc.id} value={loc.id}>
+                      📍 {loc.name} ({loc.code})
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Location Name & Coordinates */}
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  ชื่อสถานที่แสดงผล
                 </label>
                 <input
                   type="text"
@@ -1364,6 +1506,33 @@ export const AdminAttendanceTable: React.FC<AdminAttendanceTableProps> = ({
                   onChange={(e) => setEditForm((prev) => ({ ...prev, locationName: e.target.value }))}
                   className="w-full px-3 py-2 text-xs border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none"
                 />
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    ละติจูด (Latitude)
+                  </label>
+                  <input
+                    type="number"
+                    step="any"
+                    value={editForm.latitude}
+                    onChange={(e) => setEditForm((prev) => ({ ...prev, latitude: e.target.value }))}
+                    className="w-full px-3 py-2 text-xs font-mono border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    ลองจิจูด (Longitude)
+                  </label>
+                  <input
+                    type="number"
+                    step="any"
+                    value={editForm.longitude}
+                    onChange={(e) => setEditForm((prev) => ({ ...prev, longitude: e.target.value }))}
+                    className="w-full px-3 py-2 text-xs font-mono border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none"
+                  />
+                </div>
               </div>
 
               {/* Note */}
@@ -1422,6 +1591,7 @@ export const AdminAttendanceTable: React.FC<AdminAttendanceTableProps> = ({
                 onClick={() => {
                   setShowRestoreModal(false);
                   setRestoreJsonInput('');
+                  setRestoreError(null);
                 }}
                 className="text-slate-400 hover:text-slate-600 p-1 cursor-pointer"
               >
@@ -1430,6 +1600,12 @@ export const AdminAttendanceTable: React.FC<AdminAttendanceTableProps> = ({
             </div>
 
             <form onSubmit={handleRestoreSubmit} className="space-y-4">
+              {restoreError && (
+                <div className="p-3 bg-rose-50 border border-rose-200 text-rose-700 text-xs rounded-xl flex items-center gap-2">
+                  <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0" />
+                  <span>{restoreError}</span>
+                </div>
+              )}
               <div>
                 <label className="block text-xs font-semibold text-slate-700 mb-1">
                   เลือกไฟล์ JSON จากเครื่อง
@@ -1477,6 +1653,7 @@ export const AdminAttendanceTable: React.FC<AdminAttendanceTableProps> = ({
                   onClick={() => {
                     setShowRestoreModal(false);
                     setRestoreJsonInput('');
+                    setRestoreError(null);
                   }}
                   className="px-4 py-2 text-xs font-medium text-slate-600 hover:bg-slate-100 rounded-xl transition cursor-pointer"
                 >
@@ -1492,6 +1669,50 @@ export const AdminAttendanceTable: React.FC<AdminAttendanceTableProps> = ({
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Confirmation Modal (Delete Attendance / Clean Demo) */}
+      {confirmAction && (
+        <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl max-w-sm w-full p-5 shadow-2xl space-y-4">
+            <div className="flex items-start gap-3">
+              <div className="p-2.5 bg-rose-100 text-rose-600 rounded-xl shrink-0">
+                <Trash2 className="w-5 h-5" />
+              </div>
+              <div>
+                <h4 className="font-bold text-slate-800 text-sm">
+                  {confirmAction.type === 'delete'
+                    ? 'ยืนยันการลบรายการลงเวลา'
+                    : 'ยืนยันการลบข้อมูลตัวอย่าง'}
+                </h4>
+                <p className="text-xs text-slate-600 mt-1">
+                  {confirmAction.type === 'delete' && confirmAction.record
+                    ? `ต้องการลบรายการลงเวลาของ "${confirmAction.record.userName}" วันที่ ${confirmAction.record.date} ${confirmAction.record.time} ใช่หรือไม่?`
+                    : 'ยืนยันการลบข้อมูลตัวอย่าง/ทดสอบทั้งหมด (ระบบจะลบเฉพาะรายการทดสอบ และคงข้อมูลจริงไว้ทั้งหมด)?'}
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100">
+              <button
+                type="button"
+                onClick={() => setConfirmAction(null)}
+                disabled={isConfirmingAction}
+                className="px-4 py-2 text-xs font-semibold text-slate-600 bg-slate-100 hover:bg-slate-200 rounded-xl cursor-pointer"
+              >
+                ยกเลิก
+              </button>
+              <button
+                type="button"
+                onClick={executeConfirmAction}
+                disabled={isConfirmingAction}
+                className="px-4 py-2 text-xs font-bold text-white bg-rose-600 hover:bg-rose-700 rounded-xl cursor-pointer disabled:opacity-50"
+              >
+                {isConfirmingAction ? 'กำลังดำเนินการ...' : 'ยืนยัน'}
+              </button>
+            </div>
           </div>
         </div>
       )}

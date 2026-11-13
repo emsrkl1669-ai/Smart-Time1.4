@@ -148,6 +148,11 @@ export const AdminUserManagement: React.FC<AdminUserManagementProps> = ({
 
   const [isLoading, setIsLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [resetError, setResetError] = useState<string | null>(null);
+  const [csvError, setCsvError] = useState<string | null>(null);
+  const [deleteConfirmUser, setDeleteConfirmUser] = useState<User | null>(null);
+  const [deleteConfirmDept, setDeleteConfirmDept] = useState<Department | null>(null);
 
   // User passwords and credentials distribution (Central Database)
   const [passwordsMap, setPasswordsMap] = useState<Record<string, string>>({});
@@ -351,13 +356,16 @@ export const AdminUserManagement: React.FC<AdminUserManagementProps> = ({
       });
 
       const res = await api.batchImportUsers(payload);
+      setCsvError(null);
       setCopiedToast(res.message);
+      setTimeout(() => setCopiedToast(null), 4000);
       setIsCsvImportOpen(false);
       setCsvTextContent('');
       setCsvPreviewRows([]);
+      await loadPasswords();
       onRefresh();
     } catch (err: any) {
-      alert(`นำเข้าไม่สำเร็จ: ${err.message}`);
+      setCsvError(`นำเข้าไม่สำเร็จ: ${err.message}`);
     } finally {
       setIsImportingCsv(false);
     }
@@ -410,17 +418,20 @@ export const AdminUserManagement: React.FC<AdminUserManagementProps> = ({
   const handleResetPasswordSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!resetModalUser || !resetPasswordInput.trim()) return;
+    setResetError(null);
     try {
       setIsLoading(true);
-      await api.resetUserPassword(resetModalUser.id, resetPasswordInput.trim());
+      const newPw = resetPasswordInput.trim();
+      await api.resetUserPassword(resetModalUser.id, newPw);
+      setPasswordsMap((prev) => ({ ...prev, [resetModalUser.id]: newPw }));
       await loadPasswords();
+      setCopiedToast(`เปลี่ยนรหัสผ่านของ "${resetModalUser.fullName}" สำเร็จ`);
       setResetModalUser(null);
       setResetPasswordInput('');
-      setCopiedToast(`เปลี่ยนรหัสผ่านของ "${resetModalUser.fullName}" สำเร็จ`);
-      setTimeout(() => setCopiedToast(null), 3000);
+      setTimeout(() => setCopiedToast(null), 3500);
       onRefresh();
     } catch (err: any) {
-      alert(err.message || 'รีเซ็ตรหัสผ่านไม่สำเร็จ');
+      setResetError(err.message || 'รีเซ็ตรหัสผ่านไม่สำเร็จ');
     } finally {
       setIsLoading(false);
     }
@@ -482,23 +493,38 @@ export const AdminUserManagement: React.FC<AdminUserManagementProps> = ({
     e.preventDefault();
     setIsLoading(true);
     setErrorMsg(null);
+    setActionError(null);
 
     try {
       if (editingUser) {
         // Update
         const payload: any = { ...userFormData };
-        if (!payload.password) delete payload.password; // Do not overwrite if blank
+        const newPassword = payload.password ? String(payload.password).trim() : '';
+        if (!newPassword) {
+          delete payload.password;
+        } else {
+          payload.password = newPassword;
+        }
 
         const updated = await api.updateUser(editingUser.id, payload);
+        if (newPassword) {
+          setPasswordsMap((prev) => ({ ...prev, [editingUser.id]: newPassword }));
+        }
+        await loadPasswords();
         setEditingUser(null);
         setCopiedToast(`อัปเดตข้อมูลของ "${updated.fullName}" ในฐานข้อมูลกลางสำเร็จแล้ว (มีผลทันทีทุกอุปกรณ์)`);
         setTimeout(() => setCopiedToast(null), 4000);
       } else {
         // Create
-        if (!userFormData.password) {
+        if (!userFormData.password.trim()) {
           throw new Error('กรุณากำหนดรหัสผ่านสำหรับผู้ใช้งานใหม่');
         }
-        const created = await api.createUser(userFormData);
+        const created = await api.createUser({
+          ...userFormData,
+          password: userFormData.password.trim(),
+        });
+        setPasswordsMap((prev) => ({ ...prev, [created.id]: userFormData.password.trim() }));
+        await loadPasswords();
         setIsAddUserOpen(false);
         setCopiedToast(`เพิ่มผู้ใช้งาน "${created.fullName}" สำเร็จแล้ว`);
         setTimeout(() => setCopiedToast(null), 4000);
@@ -512,19 +538,31 @@ export const AdminUserManagement: React.FC<AdminUserManagementProps> = ({
   };
 
   // Delete User
-  const handleDeleteUser = async (user: User) => {
+  const handleDeleteUser = (user: User) => {
     if (user.username === 'admin') {
-      alert('ไม่สามารถลบบัญชีผู้ดูแลระบบหลัก (Admin) ได้');
+      setActionError('ไม่สามารถลบบัญชีผู้ดูแลระบบหลัก (Admin) ได้');
       return;
     }
-    const confirmed = window.confirm(`คุณแน่ใจหรือไม่ว่าต้องการลบผู้ใช้งาน "${user.fullName}"? ข้อมูลการลงเวลาจะไม่หายไป`);
-    if (!confirmed) return;
+    setActionError(null);
+    setDeleteConfirmUser(user);
+  };
 
+  const confirmDeleteUser = async () => {
+    if (!deleteConfirmUser) return;
+    setIsLoading(true);
+    setActionError(null);
     try {
-      await api.deleteUser(user.id);
+      const targetName = deleteConfirmUser.fullName;
+      await api.deleteUser(deleteConfirmUser.id);
+      setDeleteConfirmUser(null);
+      setCopiedToast(`ลบผู้ใช้งาน "${targetName}" เรียบร้อยแล้ว`);
+      setTimeout(() => setCopiedToast(null), 3500);
       onRefresh();
     } catch (err: any) {
-      alert(err.message || 'ไม่สามารถลบผู้ใช้งานได้');
+      setDeleteConfirmUser(null);
+      setActionError(err.message || 'ไม่สามารถลบผู้ใช้งานได้');
+    } finally {
+      setIsLoading(false);
     }
   };
 
@@ -565,13 +603,16 @@ export const AdminUserManagement: React.FC<AdminUserManagementProps> = ({
     e.preventDefault();
     setIsLoading(true);
     setErrorMsg(null);
+    setActionError(null);
 
     try {
-      await api.saveDepartment({
+      const savedDept = await api.saveDepartment({
         id: editingDept ? editingDept.id : undefined,
         ...deptFormData,
       });
       setIsDeptModalOpen(false);
+      setCopiedToast(`บันทึกข้อมูลแผนก "${savedDept.name}" สำเร็จแล้ว`);
+      setTimeout(() => setCopiedToast(null), 3500);
       onRefresh();
     } catch (err: any) {
       setErrorMsg(err.message || 'เกิดข้อผิดพลาดในการบันทึกข้อมูลแผนก');
@@ -581,13 +622,27 @@ export const AdminUserManagement: React.FC<AdminUserManagementProps> = ({
   };
 
   // Delete Department
-  const handleDeleteDept = async (dept: Department) => {
-    if (!window.confirm(`คุณต้องการลบแผนก "${dept.name}" ใช่หรือไม่?`)) return;
+  const handleDeleteDept = (dept: Department) => {
+    setActionError(null);
+    setDeleteConfirmDept(dept);
+  };
+
+  const confirmDeleteDept = async () => {
+    if (!deleteConfirmDept) return;
+    setIsLoading(true);
+    setActionError(null);
     try {
-      await api.deleteDepartment(dept.id);
+      const deptName = deleteConfirmDept.name;
+      await api.deleteDepartment(deleteConfirmDept.id);
+      setDeleteConfirmDept(null);
+      setCopiedToast(`ลบแผนก "${deptName}" เรียบร้อยแล้ว`);
+      setTimeout(() => setCopiedToast(null), 3500);
       onRefresh();
     } catch (err: any) {
-      alert(err.message || 'ไม่สามารถลบแผนกได้');
+      setDeleteConfirmDept(null);
+      setActionError(err.message || 'ไม่สามารถลบแผนกได้');
+    } finally {
+      setIsLoading(false);
     }
   };
 
@@ -772,6 +827,22 @@ export const AdminUserManagement: React.FC<AdminUserManagementProps> = ({
                 type="button"
                 onClick={() => setCopiedToast(null)}
                 className="text-emerald-100 hover:text-white text-xs font-bold px-2 py-0.5 cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+          )}
+
+          {actionError && (
+            <div className="mx-4 mb-3 p-3 bg-rose-50 border border-rose-200 text-rose-700 text-xs rounded-xl flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <AlertCircle className="w-4 h-4 shrink-0 text-rose-600" />
+                <span>{actionError}</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setActionError(null)}
+                className="text-rose-400 hover:text-rose-700 text-xs font-bold px-2 py-0.5 cursor-pointer"
               >
                 ✕
               </button>
@@ -1121,11 +1192,10 @@ export const AdminUserManagement: React.FC<AdminUserManagementProps> = ({
                   <input
                     type="text"
                     required
-                    disabled={!!editingUser}
                     value={userFormData.username}
                     onChange={(e) => setUserFormData({ ...userFormData, username: e.target.value })}
                     placeholder="เช่น somchai"
-                    className="w-full text-xs sm:text-sm p-2.5 rounded-xl border border-slate-200 focus:ring-2 focus:ring-indigo-500 focus:outline-none disabled:bg-slate-100 disabled:text-slate-500"
+                    className="w-full text-xs sm:text-sm p-2.5 rounded-xl border border-slate-200 focus:ring-2 focus:ring-indigo-500 focus:outline-none"
                   />
                 </div>
 
@@ -1484,6 +1554,12 @@ export const AdminUserManagement: React.FC<AdminUserManagementProps> = ({
             </div>
 
             <form onSubmit={handleResetPasswordSubmit} className="space-y-4">
+              {resetError && (
+                <div className="p-2.5 bg-rose-50 border border-rose-200 text-rose-700 text-xs rounded-xl flex items-center gap-2">
+                  <AlertCircle className="w-4 h-4 shrink-0" />
+                  <span>{resetError}</span>
+                </div>
+              )}
               <div>
                 <label className="block text-xs font-semibold text-slate-700 mb-1">
                   กำหนดรหัสผ่านใหม่ *
@@ -1554,6 +1630,12 @@ export const AdminUserManagement: React.FC<AdminUserManagementProps> = ({
             </div>
 
             <div className="space-y-4 overflow-y-auto pr-1 flex-1">
+              {csvError && (
+                <div className="p-3 bg-rose-50 border border-rose-200 text-rose-700 text-xs rounded-xl flex items-center gap-2">
+                  <AlertCircle className="w-4 h-4 shrink-0" />
+                  <span>{csvError}</span>
+                </div>
+              )}
               <div>
                 <label className="block text-xs font-semibold text-slate-700 mb-1.5">
                   1. เลือกไฟล์ CSV จากเครื่องของคุณ
@@ -1631,6 +1713,7 @@ export const AdminUserManagement: React.FC<AdminUserManagementProps> = ({
                   setIsCsvImportOpen(false);
                   setCsvPreviewRows([]);
                   setCsvTextContent('');
+                  setCsvError(null);
                 }}
                 className="px-4 py-2 text-xs font-semibold text-slate-600 bg-slate-100 hover:bg-slate-200 rounded-xl transition cursor-pointer"
               >
@@ -1643,6 +1726,80 @@ export const AdminUserManagement: React.FC<AdminUserManagementProps> = ({
                 className="px-5 py-2 text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded-xl transition disabled:opacity-50 cursor-pointer shadow-xs flex items-center gap-1.5"
               >
                 {isImportingCsv ? 'กำลังนำเข้าสู่ฐานข้อมูล...' : `ยืนยันนำเข้า (${csvPreviewRows.length} บัญชี)`}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* CONFIRM DELETE USER MODAL */}
+      {deleteConfirmUser && (
+        <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl max-w-sm w-full p-5 shadow-2xl space-y-4">
+            <div className="flex items-start gap-3">
+              <div className="p-2.5 bg-rose-100 text-rose-600 rounded-xl shrink-0">
+                <Trash2 className="w-5 h-5" />
+              </div>
+              <div>
+                <h4 className="font-bold text-slate-800 text-sm">ยืนยันการลบผู้ใช้งาน</h4>
+                <p className="text-xs text-slate-600 mt-1">
+                  คุณแน่ใจหรือไม่ว่าต้องการลบผู้ใช้งาน "{deleteConfirmUser.fullName}"? ข้อมูลประวัติการลงเวลาเดิมจะยังคงอยู่
+                </p>
+              </div>
+            </div>
+            <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100">
+              <button
+                type="button"
+                onClick={() => setDeleteConfirmUser(null)}
+                disabled={isLoading}
+                className="px-4 py-2 text-xs font-semibold text-slate-600 bg-slate-100 hover:bg-slate-200 rounded-xl cursor-pointer"
+              >
+                ยกเลิก
+              </button>
+              <button
+                type="button"
+                onClick={confirmDeleteUser}
+                disabled={isLoading}
+                className="px-4 py-2 text-xs font-bold text-white bg-rose-600 hover:bg-rose-700 rounded-xl cursor-pointer disabled:opacity-50"
+              >
+                {isLoading ? 'กำลังลบ...' : 'ยืนยันการลบ'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* CONFIRM DELETE DEPARTMENT MODAL */}
+      {deleteConfirmDept && (
+        <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl max-w-sm w-full p-5 shadow-2xl space-y-4">
+            <div className="flex items-start gap-3">
+              <div className="p-2.5 bg-rose-100 text-rose-600 rounded-xl shrink-0">
+                <Trash2 className="w-5 h-5" />
+              </div>
+              <div>
+                <h4 className="font-bold text-slate-800 text-sm">ยืนยันการลบกลุ่ม/แผนก</h4>
+                <p className="text-xs text-slate-600 mt-1">
+                  คุณต้องการลบแผนก "{deleteConfirmDept.name}" ใช่หรือไม่?
+                </p>
+              </div>
+            </div>
+            <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100">
+              <button
+                type="button"
+                onClick={() => setDeleteConfirmDept(null)}
+                disabled={isLoading}
+                className="px-4 py-2 text-xs font-semibold text-slate-600 bg-slate-100 hover:bg-slate-200 rounded-xl cursor-pointer"
+              >
+                ยกเลิก
+              </button>
+              <button
+                type="button"
+                onClick={confirmDeleteDept}
+                disabled={isLoading}
+                className="px-4 py-2 text-xs font-bold text-white bg-rose-600 hover:bg-rose-700 rounded-xl cursor-pointer disabled:opacity-50"
+              >
+                {isLoading ? 'กำลังลบ...' : 'ยืนยันการลบ'}
               </button>
             </div>
           </div>

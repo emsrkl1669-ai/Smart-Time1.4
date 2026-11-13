@@ -4,9 +4,23 @@ import {
   authenticateWithFirestore,
   verifyUserWithFirestore,
   getUsersFromFirestore,
+  getUsersWithPasswordsFromFirestore,
   getDepartmentsFromFirestore,
   getLocationsFromFirestore,
+  getAttendanceFromFirestore,
   getSettingsFromFirestore,
+  saveUserToFirestore,
+  deleteUserFromFirestore,
+  resetUserPasswordInFirestore,
+  batchImportUsersToFirestore,
+  saveDepartmentToFirestore,
+  deleteDepartmentFromFirestore,
+  saveLocationToFirestore,
+  deleteLocationFromFirestore,
+  updateAttendanceInFirestore,
+  deleteAttendanceFromFirestore,
+  cleanDemoAttendanceInFirestore,
+  updateSettingsInFirestore,
 } from './firebase';
 
 const STORAGE_KEYS = {
@@ -161,6 +175,31 @@ export async function freshFetch(url: string, init?: RequestInit): Promise<Respo
     cache: 'no-store',
     headers,
   });
+}
+
+class BackendValidationError extends Error {
+  status: number;
+  constructor(message: string, status: number) {
+    super(message);
+    this.status = status;
+  }
+}
+
+async function callBackendJson<T>(url: string, init?: RequestInit, defaultErrorMsg = 'ดำเนินการไม่สำเร็จ'): Promise<T> {
+  const res = await freshFetch(url, init);
+  const contentType = res.headers.get('content-type') || '';
+  const isJson = contentType.includes('application/json');
+
+  if (res.ok && isJson) {
+    return (await res.json()) as T;
+  }
+
+  if (isJson && res.status >= 400 && res.status < 500) {
+    const err = await res.json().catch(() => ({}));
+    throw new BackendValidationError(err.error || defaultErrorMsg, res.status);
+  }
+
+  throw new Error(`HTTP ${res.status}`);
 }
 
 // API Methods
@@ -391,36 +430,53 @@ export const api = {
   },
 
   async createUser(userData: Partial<User> & { password?: string }): Promise<User> {
-    const res = await freshFetch('/api/users', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(userData),
-    });
-
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      throw new Error(err.error || 'เพิ่มผู้ใช้งานไม่สำเร็จ');
+    let createdUser: User;
+    try {
+      const data = await callBackendJson<{ user: User }>(
+        '/api/users',
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(userData),
+        },
+        'เพิ่มผู้ใช้งานไม่สำเร็จ'
+      );
+      createdUser = data.user;
+    } catch (err) {
+      if (err instanceof BackendValidationError && err.status !== 404) {
+        throw new Error(err.message);
+      }
+      createdUser = await saveUserToFirestore(userData);
     }
 
-    const data = await res.json();
-    notifyLocalMutation('users_updated', data.user);
-    return data.user;
+    const cachedUsers = getCache<User[]>(STORAGE_KEYS.CACHED_USERS) || [];
+    if (!cachedUsers.some((u) => u.id === createdUser.id)) {
+      cachedUsers.push(createdUser);
+      setCache(STORAGE_KEYS.CACHED_USERS, cachedUsers);
+    }
+    notifyLocalMutation('users_updated', createdUser);
+    return createdUser;
   },
 
   async updateUser(id: string, userData: Partial<User> & { password?: string }): Promise<User> {
-    const res = await freshFetch(`/api/users/${id}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(userData),
-    });
-
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      throw new Error(err.error || 'แก้ไขข้อมูลผู้ใช้งานไม่สำเร็จ');
+    let updatedUser: User;
+    try {
+      const data = await callBackendJson<{ user: User }>(
+        `/api/users/${id}`,
+        {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(userData),
+        },
+        'แก้ไขข้อมูลผู้ใช้งานไม่สำเร็จ'
+      );
+      updatedUser = data.user;
+    } catch (err) {
+      if (err instanceof BackendValidationError && err.status !== 404) {
+        throw new Error(err.message);
+      }
+      updatedUser = await saveUserToFirestore({ ...userData, id });
     }
-
-    const data = await res.json();
-    const updatedUser = data.user;
 
     // Immediately update local cache so other components or tabs get the updated user
     const cachedUsers = getCache<User[]>(STORAGE_KEYS.CACHED_USERS) || [];
@@ -439,13 +495,17 @@ export const api = {
   },
 
   async deleteUser(id: string): Promise<void> {
-    const res = await freshFetch(`/api/users/${id}`, {
-      method: 'DELETE',
-    });
-
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      throw new Error(err.error || 'ลบผู้ใช้งานไม่สำเร็จ');
+    try {
+      await callBackendJson(
+        `/api/users/${id}`,
+        { method: 'DELETE' },
+        'ลบผู้ใช้งานไม่สำเร็จ'
+      );
+    } catch (err) {
+      if (err instanceof BackendValidationError && err.status !== 404) {
+        throw new Error(err.message);
+      }
+      await deleteUserFromFirestore(id);
     }
 
     const cachedUsers = getCache<User[]>(STORAGE_KEYS.CACHED_USERS) || [];
@@ -454,46 +514,64 @@ export const api = {
   },
 
   async batchImportUsers(users: (Partial<User> & { password?: string })[]): Promise<{ importedCount: number; updatedCount: number; message: string; totalUsers: number }> {
-    const res = await freshFetch('/api/users/batch', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ users }),
-    });
-
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      throw new Error(err.error || 'นำเข้าข้อมูลผู้ใช้งานไม่สำเร็จ');
+    let result: { importedCount: number; updatedCount: number; message: string; totalUsers: number };
+    try {
+      result = await callBackendJson(
+        '/api/users/batch',
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ users }),
+        },
+        'นำเข้าข้อมูลผู้ใช้งานไม่สำเร็จ'
+      );
+    } catch (err) {
+      if (err instanceof BackendValidationError && err.status !== 404) {
+        throw new Error(err.message);
+      }
+      result = await batchImportUsersToFirestore(users);
     }
 
-    const data = await res.json();
     notifyLocalMutation('users_updated');
-    return data;
+    return result;
   },
 
   async getUsersWithPasswords(): Promise<(User & { password?: string })[]> {
     if (isOnline()) {
       try {
         const res = await freshFetch('/api/admin/users-with-passwords');
-        if (res.ok) {
+        const contentType = res.headers.get('content-type') || '';
+        if (res.ok && contentType.includes('application/json')) {
           return await res.json();
         }
       } catch (e) {
-        console.warn('Failed to fetch users with passwords', e);
+        console.warn('Failed to fetch users with passwords from API, checking Firestore');
+      }
+
+      const fbUsers = await getUsersWithPasswordsFromFirestore();
+      if (fbUsers && fbUsers.length > 0) {
+        return fbUsers;
       }
     }
     return this.getUsers();
   },
 
   async resetUserPassword(id: string, newPassword: string): Promise<void> {
-    const res = await freshFetch(`/api/users/${id}/reset-password`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ newPassword }),
-    });
-
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      throw new Error(err.error || 'รีเซ็ตรหัสผ่านไม่สำเร็จ');
+    try {
+      await callBackendJson(
+        `/api/users/${id}/reset-password`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ newPassword }),
+        },
+        'รีเซ็ตรหัสผ่านไม่สำเร็จ'
+      );
+    } catch (err) {
+      if (err instanceof BackendValidationError && err.status !== 404) {
+        throw new Error(err.message);
+      }
+      await resetUserPasswordInFirestore(id, newPassword);
     }
 
     notifyLocalMutation('users_updated', { resetPasswordId: id });
@@ -538,19 +616,24 @@ export const api = {
   },
 
   async saveDepartment(department: Partial<Department>): Promise<Department> {
-    const res = await freshFetch('/api/departments', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(department),
-    });
-
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      throw new Error(err.error || 'บันทึกข้อมูลแผนกไม่สำเร็จ');
+    let savedDept: Department;
+    try {
+      const data = await callBackendJson<{ department: Department }>(
+        '/api/departments',
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(department),
+        },
+        'บันทึกข้อมูลแผนกไม่สำเร็จ'
+      );
+      savedDept = data.department;
+    } catch (err) {
+      if (err instanceof BackendValidationError && err.status !== 404) {
+        throw new Error(err.message);
+      }
+      savedDept = await saveDepartmentToFirestore(department);
     }
-
-    const data = await res.json();
-    const savedDept = data.department;
 
     const cached = getCache<Department[]>(STORAGE_KEYS.CACHED_DEPARTMENTS) || [];
     const idx = cached.findIndex((d) => d.id === savedDept.id);
@@ -566,13 +649,17 @@ export const api = {
   },
 
   async deleteDepartment(id: string): Promise<void> {
-    const res = await freshFetch(`/api/departments/${id}`, {
-      method: 'DELETE',
-    });
-
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      throw new Error(err.error || 'ลบแผนกไม่สำเร็จ');
+    try {
+      await callBackendJson(
+        `/api/departments/${id}`,
+        { method: 'DELETE' },
+        'ลบแผนกไม่สำเร็จ'
+      );
+    } catch (err) {
+      if (err instanceof BackendValidationError && err.status !== 404) {
+        throw new Error(err.message);
+      }
+      await deleteDepartmentFromFirestore(id);
     }
 
     const cached = getCache<Department[]>(STORAGE_KEYS.CACHED_DEPARTMENTS) || [];
@@ -607,19 +694,24 @@ export const api = {
   },
 
   async saveLocation(location: Partial<WorkLocation>): Promise<WorkLocation> {
-    const res = await freshFetch('/api/locations', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(location),
-    });
-
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      throw new Error(err.error || 'บันทึกจุดปฏิบัติงานไม่สำเร็จ');
+    let savedLoc: WorkLocation;
+    try {
+      const data = await callBackendJson<{ location: WorkLocation }>(
+        '/api/locations',
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(location),
+        },
+        'บันทึกจุดปฏิบัติงานไม่สำเร็จ'
+      );
+      savedLoc = data.location;
+    } catch (err) {
+      if (err instanceof BackendValidationError && err.status !== 404) {
+        throw new Error(err.message);
+      }
+      savedLoc = await saveLocationToFirestore(location);
     }
-
-    const data = await res.json();
-    const savedLoc = data.location;
 
     const cached = getCache<WorkLocation[]>(STORAGE_KEYS.CACHED_LOCATIONS) || [];
     const idx = cached.findIndex((l) => l.id === savedLoc.id);
@@ -635,13 +727,17 @@ export const api = {
   },
 
   async deleteLocation(id: string): Promise<void> {
-    const res = await freshFetch(`/api/locations/${id}`, {
-      method: 'DELETE',
-    });
-
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      throw new Error(err.error || 'ลบจุดปฏิบัติงานไม่สำเร็จ');
+    try {
+      await callBackendJson(
+        `/api/locations/${id}`,
+        { method: 'DELETE' },
+        'ลบจุดปฏิบัติงานไม่สำเร็จ'
+      );
+    } catch (err) {
+      if (err instanceof BackendValidationError && err.status !== 404) {
+        throw new Error(err.message);
+      }
+      await deleteLocationFromFirestore(id);
     }
 
     const cached = getCache<WorkLocation[]>(STORAGE_KEYS.CACHED_LOCATIONS) || [];
@@ -669,11 +765,11 @@ export const api = {
         if (params?.endDate) query.append('endDate', params.endDate);
 
         const res = await freshFetch(`/api/attendance?${query.toString()}`);
-        if (res.ok) {
+        const contentType = res.headers.get('content-type') || '';
+        if (res.ok && contentType.includes('application/json')) {
           const records: AttendanceRecord[] = await res.json();
           setCache(STORAGE_KEYS.CACHED_ATTENDANCE, records);
-          
-          // Also append any pending offline records not yet synced
+
           const offlineQueue = getOfflineQueue();
           if (offlineQueue.length > 0) {
             return [...offlineQueue, ...records];
@@ -681,7 +777,14 @@ export const api = {
           return records;
         }
       } catch (e) {
-        console.warn('Attendance load error, using offline cache');
+        console.warn('Attendance API load error, checking Cloud Firestore');
+      }
+
+      const fbRecords = await getAttendanceFromFirestore(params);
+      if (fbRecords !== null) {
+        setCache(STORAGE_KEYS.CACHED_ATTENDANCE, fbRecords);
+        const offlineQueue = getOfflineQueue();
+        return offlineQueue.length > 0 ? [...offlineQueue, ...fbRecords] : fbRecords;
       }
     }
 
@@ -816,12 +919,23 @@ export const api = {
   },
 
   async deleteAttendance(id: string): Promise<void> {
-    const res = await freshFetch(`/api/attendance/${id}`, {
-      method: 'DELETE',
-    });
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      throw new Error(err.error || 'ลบรายการไม่สำเร็จ');
+    const queue = getOfflineQueue();
+    const inQueue = queue.some((r) => r.id === id);
+
+    try {
+      await callBackendJson(
+        `/api/attendance/${id}`,
+        { method: 'DELETE' },
+        'ลบรายการไม่สำเร็จ'
+      );
+    } catch (err) {
+      if (err instanceof BackendValidationError && err.status === 404 && inQueue) {
+        // Offline-queued record deleted locally before upload
+      } else if (err instanceof BackendValidationError && err.status !== 404) {
+        throw new Error(err.message);
+      } else if (!inQueue) {
+        await deleteAttendanceFromFirestore(id);
+      }
     }
 
     // Evict from local cache and queue
@@ -832,41 +946,77 @@ export const api = {
   },
 
   async updateAttendance(id: string, updates: Partial<AttendanceRecord>): Promise<AttendanceRecord> {
-    const res = await freshFetch(`/api/attendance/${id}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(updates),
-    });
+    const queue = getOfflineQueue();
+    const queueIdx = queue.findIndex((r) => r.id === id);
+    let updatedRecord: AttendanceRecord | null = null;
 
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      throw new Error(err.error || 'แก้ไขข้อมูลการลงเวลาไม่สำเร็จ');
+    if (queueIdx !== -1 && !isOnline()) {
+      updatedRecord = { ...queue[queueIdx], ...updates };
+      queue[queueIdx] = updatedRecord;
+      saveOfflineQueue(queue);
+      notifyLocalMutation('attendance_updated', updatedRecord);
+      return updatedRecord;
     }
 
-    const data = await res.json();
-    const updatedRecord = data.record;
+    try {
+      const data = await callBackendJson<{ record: AttendanceRecord }>(
+        `/api/attendance/${id}`,
+        {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(updates),
+        },
+        'แก้ไขข้อมูลการลงเวลาไม่สำเร็จ'
+      );
+      updatedRecord = data.record;
+    } catch (err) {
+      if (queueIdx !== -1 && (!(err instanceof BackendValidationError) || err.status === 404)) {
+        updatedRecord = { ...queue[queueIdx], ...updates };
+        queue[queueIdx] = updatedRecord;
+        saveOfflineQueue(queue);
+        notifyLocalMutation('attendance_updated', updatedRecord);
+        return updatedRecord;
+      }
+      if (err instanceof BackendValidationError && err.status !== 404) {
+        throw new Error(err.message);
+      }
+      updatedRecord = await updateAttendanceInFirestore(id, updates);
+    }
+
+    if (queueIdx !== -1 && updatedRecord) {
+      queue[queueIdx] = { ...queue[queueIdx], ...updatedRecord };
+      saveOfflineQueue(queue);
+    }
 
     const cached = getCache<AttendanceRecord[]>(STORAGE_KEYS.CACHED_ATTENDANCE) || [];
     const idx = cached.findIndex((r) => r.id === id);
-    if (idx !== -1) {
+    if (idx !== -1 && updatedRecord) {
       cached[idx] = { ...cached[idx], ...updatedRecord };
       setCache(STORAGE_KEYS.CACHED_ATTENDANCE, cached);
     }
 
     notifyLocalMutation('attendance_updated', updatedRecord);
-    return updatedRecord;
+    return updatedRecord!;
   },
 
   async cleanDemoAttendance(): Promise<{ message: string; removedCount: number; currentCount: number }> {
-    const res = await freshFetch('/api/attendance/clean-demo', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-    });
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      throw new Error(err.error || 'ลบข้อมูลตัวอย่างไม่สำเร็จ');
+    let result: { message: string; removedCount: number; currentCount: number };
+    try {
+      result = await callBackendJson(
+        '/api/attendance/clean-demo',
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+        },
+        'ลบข้อมูลตัวอย่างไม่สำเร็จ'
+      );
+    } catch (err) {
+      if (err instanceof BackendValidationError && err.status !== 404) {
+        throw new Error(err.message);
+      }
+      result = await cleanDemoAttendanceInFirestore();
     }
-    // Also clear from local cache
+
     const cached = getCache<AttendanceRecord[]>(STORAGE_KEYS.CACHED_ATTENDANCE) || [];
     const cleaned = cached.filter(
       (r) =>
@@ -877,7 +1027,7 @@ export const api = {
     );
     setCache(STORAGE_KEYS.CACHED_ATTENDANCE, cleaned);
     notifyLocalMutation('attendance_updated');
-    return await res.json();
+    return result;
   },
 
   async backupAttendanceSnapshot(): Promise<{
@@ -965,17 +1115,28 @@ export const api = {
   },
 
   async updateSettings(settings: Partial<SystemSettings>): Promise<SystemSettings> {
-    const res = await freshFetch('/api/settings', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(settings),
-    });
-    if (!res.ok) {
-      throw new Error('บันทึกการตั้งค่าไม่สำเร็จ');
+    let savedSettings: SystemSettings;
+    try {
+      const data = await callBackendJson<{ settings: SystemSettings }>(
+        '/api/settings',
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(settings),
+        },
+        'บันทึกการตั้งค่าไม่สำเร็จ'
+      );
+      savedSettings = data.settings;
+    } catch (err) {
+      if (err instanceof BackendValidationError && err.status !== 404) {
+        throw new Error(err.message);
+      }
+      savedSettings = await updateSettingsInFirestore(settings);
     }
-    const data = await res.json();
-    notifyLocalMutation('settings_updated', data.settings);
-    return data.settings;
+
+    setCache(STORAGE_KEYS.CACHED_SETTINGS, savedSettings);
+    notifyLocalMutation('settings_updated', savedSettings);
+    return savedSettings;
   },
 
   // LINE Test & Logs
