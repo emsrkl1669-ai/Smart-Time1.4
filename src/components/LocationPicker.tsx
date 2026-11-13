@@ -14,7 +14,7 @@ import {
   ShieldCheck,
 } from 'lucide-react';
 
-interface LocationData {
+export interface LocationData {
   latitude: number;
   longitude: number;
   accuracy?: number;
@@ -23,6 +23,9 @@ interface LocationData {
   selectedWorkLocationName?: string;
   isWithinGeofence?: boolean;
   distanceMeters?: number;
+  deviceLatitude?: number;
+  deviceLongitude?: number;
+  detailedAddress?: string;
 }
 
 interface LocationPickerProps {
@@ -33,6 +36,44 @@ interface LocationPickerProps {
   onLocationUpdate: (loc: LocationData) => void;
   isLoading: boolean;
   setIsLoading: (loading: boolean) => void;
+}
+
+function formatThaiNominatimAddress(address: any, displayName?: string): string {
+  if (!address || typeof address !== 'object') {
+    return displayName || '';
+  }
+
+  const parts: string[] = [];
+  const houseRoad = [
+    address.house_number ? `เลขที่ ${address.house_number}` : '',
+    address.road || address.pedestrian || address.footway || '',
+  ]
+    .filter(Boolean)
+    .join(' ');
+  if (houseRoad) parts.push(houseRoad);
+
+  const subdistrict =
+    address.suburb || address.quarter || address.village || address.neighbourhood || address.hamlet;
+  if (subdistrict) {
+    parts.push(subdistrict.startsWith('ต.') || subdistrict.startsWith('ตำบล') || subdistrict.startsWith('แขวง') ? subdistrict : `ต.${subdistrict}`);
+  }
+
+  const district = address.city_district || address.county || address.town || address.city;
+  if (district && district !== subdistrict) {
+    parts.push(district.startsWith('อ.') || district.startsWith('อำเภอ') || district.startsWith('เขต') ? district : `อ.${district}`);
+  }
+
+  const province = address.state || address.province;
+  if (province && province !== district) {
+    parts.push(province.startsWith('จ.') || province.startsWith('จังหวัด') || province.includes('กรุงเทพ') ? province : `จ.${province}`);
+  }
+
+  if (address.postcode) {
+    parts.push(address.postcode);
+  }
+
+  const combined = parts.filter(Boolean).join(' ');
+  return combined || displayName || '';
 }
 
 export const LocationPicker: React.FC<LocationPickerProps> = ({
@@ -46,12 +87,14 @@ export const LocationPicker: React.FC<LocationPickerProps> = ({
 }) => {
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
-  // Device GPS state (used for distance calculation to the Admin-defined pin)
+  // Device GPS state (used for distance calculation & photo watermark coordinates)
   const [deviceCoords, setDeviceCoords] = useState<{
     latitude: number;
     longitude: number;
     accuracy?: number;
   } | null>(null);
+  const [resolvedAddress, setResolvedAddress] = useState<string>('');
+  const lastGeocodedKeyRef = useRef<string>('');
 
   // Determine initial selected Admin work location
   const getInitialLocationId = (): string => {
@@ -71,21 +114,54 @@ export const LocationPicker: React.FC<LocationPickerProps> = ({
     }
   }, [workLocations, userAssignedLocationId]);
 
+  // Reverse geocode coordinates in Thai (House no., Road, Subdistrict, District, Province)
+  const reverseGeocodeThai = async (lat: number, lon: number, fallbackAddr?: string): Promise<string> => {
+    const cacheKey = `${lat.toFixed(4)},${lon.toFixed(4)}`;
+    if (lastGeocodedKeyRef.current === cacheKey && resolvedAddress) {
+      return resolvedAddress;
+    }
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 3500);
+      const url = `https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${encodeURIComponent(lat)}&lon=${encodeURIComponent(lon)}&accept-language=th&addressdetails=1`;
+      const res = await fetch(url, { signal: controller.signal });
+      clearTimeout(timeoutId);
+      if (res.ok) {
+        const json = await res.json();
+        const formatted = formatThaiNominatimAddress(json.address, json.display_name);
+        if (formatted) {
+          lastGeocodedKeyRef.current = cacheKey;
+          setResolvedAddress(formatted);
+          return formatted;
+        }
+      }
+    } catch {
+      // Fallback cleanly to Admin work location address if offline/rate-limited
+    }
+    return fallbackAddr || '';
+  };
+
   // Apply the selected Admin work location pin to the attendance form
   const applyAdminWorkLocationPin = (
     chosenLocId: string,
-    currentDevice: { latitude: number; longitude: number; accuracy?: number } | null
+    currentDevice: { latitude: number; longitude: number; accuracy?: number } | null,
+    overrideDetailedAddress?: string
   ) => {
     if (workLocations.length === 0) {
       // Fallback if no Admin work locations configured yet
       const fallbackLat = currentDevice?.latitude || 13.5781067;
       const fallbackLon = currentDevice?.longitude || 100.594069;
+      const defaultAddr =
+        '57/1 ซอยท้ายบ้าน 17, ต.ปากน้ำ, อ.เมืองสมุทรปราการ, จ.สมุทรปราการ 10290';
       onLocationUpdate({
         latitude: fallbackLat,
         longitude: fallbackLon,
         accuracy: currentDevice?.accuracy || 20,
         locationName: 'มูลนิธิร่วมกุศล สมุทรปราการ (ศูนย์วิทยุบัวหลวง กู้ชีพกู้ภัย)',
         isWithinGeofence: true,
+        deviceLatitude: currentDevice?.latitude ?? fallbackLat,
+        deviceLongitude: currentDevice?.longitude ?? fallbackLon,
+        detailedAddress: overrideDetailedAddress || resolvedAddress || defaultAddr,
       });
       return;
     }
@@ -114,6 +190,9 @@ export const LocationPicker: React.FC<LocationPickerProps> = ({
       isWithinGeofence = distanceMeters <= (targetLoc.radiusMeters || 200);
     }
 
+    const bestAddress =
+      overrideDetailedAddress || resolvedAddress || targetLoc.address || targetLoc.name;
+
     // PIN THE LOCATION STRICTLY ACCORDING TO THE ADMIN'S WORK LOCATION PIN
     onLocationUpdate({
       latitude: targetLoc.latitude,
@@ -124,6 +203,9 @@ export const LocationPicker: React.FC<LocationPickerProps> = ({
       selectedWorkLocationName: targetLoc.name,
       isWithinGeofence,
       distanceMeters,
+      deviceLatitude: currentDevice?.latitude ?? targetLoc.latitude,
+      deviceLongitude: currentDevice?.longitude ?? targetLoc.longitude,
+      detailedAddress: bestAddress,
     });
   };
 
@@ -132,6 +214,11 @@ export const LocationPicker: React.FC<LocationPickerProps> = ({
     setIsLoading(true);
     setErrorMsg(null);
 
+    const targetLoc =
+      workLocations.find((w) => w.id === targetLocId) ||
+      workLocations.find((w) => w.isActive) ||
+      workLocations[0];
+
     if (!navigator.geolocation) {
       setErrorMsg('อุปกรณ์นี้ไม่รองรับระบบ GPS');
       setIsLoading(false);
@@ -139,7 +226,7 @@ export const LocationPicker: React.FC<LocationPickerProps> = ({
       return;
     }
 
-    const handleSuccess = (pos: GeolocationPosition) => {
+    const handleSuccess = async (pos: GeolocationPosition) => {
       const dev = {
         latitude: pos.coords.latitude,
         longitude: pos.coords.longitude,
@@ -148,6 +235,12 @@ export const LocationPicker: React.FC<LocationPickerProps> = ({
       setDeviceCoords(dev);
       applyAdminWorkLocationPin(targetLocId, dev);
       setIsLoading(false);
+
+      // Enrich with detailed street/subdistrict Thai address asynchronously
+      const addr = await reverseGeocodeThai(dev.latitude, dev.longitude, targetLoc?.address);
+      if (addr) {
+        applyAdminWorkLocationPin(targetLocId, dev, addr);
+      }
     };
 
     const handleFallback = () => {

@@ -486,6 +486,11 @@ async function syncAllToFirestore(data: DatabaseData) {
     if (data.settings) {
       await firestoreSet('settings', 'global', data.settings);
     }
+    for (const log of data.lineLogs || []) {
+      if (log?.id) {
+        await firestoreSet('lineLogs', log.id, log);
+      }
+    }
     await firestoreSet('_meta', 'sync', {
       version: dbVersion,
       lastBackupTimestamp,
@@ -500,6 +505,81 @@ async function syncAllToFirestore(data: DatabaseData) {
     console.log(`☁️ Cloud Firestore sync completed: ${data.users.length} users, ${data.locations.length} locations, ${data.attendance.length} records.`);
   } catch (err) {
     console.error('Failed to syncAllToFirestore:', err);
+  }
+}
+
+async function saveBackupSnapshotToFirestore(snapshotId: string, payload: any): Promise<{ stored: boolean; chunkCount: number }> {
+  if (!firestoreDb) return { stored: false, chunkCount: 0 };
+  try {
+    // Ensure all individual collections are synced as well
+    await syncAllToFirestore(db);
+
+    const jsonString = JSON.stringify(payload, null, 2);
+    const totalBytes = Buffer.byteLength(jsonString, 'utf-8');
+    const createdAt = new Date().toISOString();
+    const projectId = firestoreConfig?.projectId || 'smart-time-ca6f9';
+    const databaseId = firestoreConfig?.firestoreDatabaseId || 'default';
+
+    // Firestore single-doc limit is 1 MiB. Embed JSON directly if <= 650 KB; otherwise chunk into 500 KB pieces.
+    const MAX_INLINE_CHARS = 650000;
+    const CHUNK_SIZE = 500000;
+    let chunkCount = 0;
+
+    if (jsonString.length <= MAX_INLINE_CHARS) {
+      const manifestDoc = {
+        id: snapshotId,
+        createdAt,
+        projectId,
+        databaseId,
+        title: payload.title || 'Smart Time Database Backup',
+        totalBytes,
+        chunkCount: 0,
+        counts: {
+          users: db.users.length,
+          departments: db.departments.length,
+          locations: db.locations.length,
+          attendance: db.attendance.length,
+        },
+        jsonBackup: jsonString,
+      };
+      await firestoreSet('backups', snapshotId, manifestDoc);
+      await firestoreSet('backups', 'latest', manifestDoc);
+    } else {
+      const totalChunks = Math.ceil(jsonString.length / CHUNK_SIZE);
+      chunkCount = totalChunks;
+      for (let i = 0; i < totalChunks; i++) {
+        const chunkData = jsonString.slice(i * CHUNK_SIZE, (i + 1) * CHUNK_SIZE);
+        await setDoc(doc(firestoreDb, 'backups', snapshotId, 'chunks', `chunk_${i}`), {
+          index: i,
+          totalChunks,
+          data: chunkData,
+          createdAt,
+        });
+      }
+      const manifestDoc = {
+        id: snapshotId,
+        createdAt,
+        projectId,
+        databaseId,
+        title: payload.title || 'Smart Time Database Backup',
+        totalBytes,
+        chunkCount,
+        counts: {
+          users: db.users.length,
+          departments: db.departments.length,
+          locations: db.locations.length,
+          attendance: db.attendance.length,
+        },
+      };
+      await firestoreSet('backups', snapshotId, manifestDoc);
+      await firestoreSet('backups', 'latest', manifestDoc);
+    }
+
+    console.log(`☁️ Stored JSON backup snapshot "${snapshotId}" (${(totalBytes / 1024).toFixed(1)} KB, chunks: ${chunkCount}) to Cloud Firestore [${projectId}]`);
+    return { stored: true, chunkCount };
+  } catch (err) {
+    console.warn('Firestore backup snapshot storage warning:', err);
+    return { stored: false, chunkCount: 0 };
   }
 }
 
@@ -1933,26 +2013,43 @@ ${newRecord.note ? `📝 หมายเหตุ/ภารกิจ: ${newRecor
     }
   });
 
-  app.post('/api/attendance/backup-snapshot', (req: Request, res: Response) => {
+  app.post('/api/attendance/backup-snapshot', async (req: Request, res: Response) => {
     try {
       if (!fs.existsSync(BACKUPS_DIR)) {
         fs.mkdirSync(BACKUPS_DIR, { recursive: true });
       }
       const dateTag = new Date().toISOString().replace(/[:.]/g, '-');
-      const backupFile = path.join(BACKUPS_DIR, `attendance-snapshot-${dateTag}.json`);
+      const snapshotId = `attendance-snapshot-${dateTag}`;
+      const backupFile = path.join(BACKUPS_DIR, `${snapshotId}.json`);
       const payload = {
-        title: 'Smart Rescue Attendance Records Backup',
+        title: 'Smart Time Attendance & Organization Backup (JSON)',
         timestamp: new Date().toISOString(),
+        projectId: firestoreConfig?.projectId || 'smart-time-ca6f9',
         totalRecords: db.attendance.length,
+        counts: {
+          users: db.users.length,
+          departments: db.departments.length,
+          locations: db.locations.length,
+          attendance: db.attendance.length,
+        },
         records: db.attendance,
+        users: db.users.map(({ password: _, ...u }) => u),
+        departments: db.departments,
+        locations: db.locations,
+        settings: db.settings,
       };
       fs.writeFileSync(backupFile, JSON.stringify(payload, null, 2), 'utf-8');
 
+      const fbResult = await saveBackupSnapshotToFirestore(snapshotId, payload);
+
       res.json({
-        message: 'สร้างจุดสำรองประวัติการลงเวลาเรียบร้อยแล้ว',
+        message: 'สร้างจุดสำรองข้อมูลและจัดเก็บลง Firebase Cloud Firestore เรียบร้อยแล้ว',
         backupFile: path.basename(backupFile),
+        backupId: snapshotId,
+        firebaseStored: fbResult.stored,
+        projectId: firestoreConfig?.projectId || 'smart-time-ca6f9',
         totalRecords: db.attendance.length,
-        timestamp: new Date().toISOString(),
+        timestamp: payload.timestamp,
       });
     } catch (err: any) {
       res.status(500).json({ error: 'สร้างจุดสำรองข้อมูลไม่สำเร็จ: ' + err?.message });
@@ -2117,20 +2214,32 @@ ${newRecord.note ? `📝 หมายเหตุ/ภารกิจ: ${newRecor
   });
 
   // 3. Trigger Instant Manual Backup
-  app.post('/api/database/backup', (req: Request, res: Response) => {
+  app.post('/api/database/backup', async (req: Request, res: Response) => {
     try {
       saveDatabase(db);
       if (!fs.existsSync(BACKUPS_DIR)) {
         fs.mkdirSync(BACKUPS_DIR, { recursive: true });
       }
       const dateTag = new Date().toISOString().replace(/[:.]/g, '-');
-      const snapshotFile = path.join(BACKUPS_DIR, `manual-snapshot-${dateTag}.json`);
-      fs.writeFileSync(snapshotFile, JSON.stringify(db, null, 2), 'utf-8');
+      const snapshotId = `manual-snapshot-${dateTag}`;
+      const snapshotFile = path.join(BACKUPS_DIR, `${snapshotId}.json`);
+      const payload = {
+        title: 'Smart Time Full Database Backup (JSON)',
+        timestamp: new Date().toISOString(),
+        projectId: firestoreConfig?.projectId || 'smart-time-ca6f9',
+        ...db,
+      };
+      fs.writeFileSync(snapshotFile, JSON.stringify(payload, null, 2), 'utf-8');
+
+      const fbResult = await saveBackupSnapshotToFirestore(snapshotId, payload);
 
       res.json({
-        message: 'สร้างจุดสำรองฐานข้อมูลฉุกเฉินเรียบร้อยแล้ว',
+        message: 'สร้างจุดสำรองฐานข้อมูลฉุกเฉินและจัดเก็บลง Firebase เรียบร้อยแล้ว',
         backupFile: path.basename(snapshotFile),
-        timestamp: new Date().toISOString(),
+        backupId: snapshotId,
+        firebaseStored: fbResult.stored,
+        projectId: firestoreConfig?.projectId || 'smart-time-ca6f9',
+        timestamp: payload.timestamp,
       });
     } catch (err: any) {
       res.status(500).json({ error: 'สร้างจุดสำรองข้อมูลไม่สำเร็จ' });

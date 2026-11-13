@@ -16,19 +16,24 @@ import {
   Sparkles,
   Server,
   CloudCheck,
+  FileText,
 } from 'lucide-react';
-import { api, getOfflineQueue } from '../services/api';
+import { api, getOfflineQueue, freshFetch } from '../services/api';
+import { AttendanceRecord } from '../types';
+import { exportToPDF } from '../utils/export';
 
 interface DatabaseShieldModalProps {
   isOpen: boolean;
   onClose: () => void;
   onRefreshData: () => Promise<void>;
+  attendanceRecords?: AttendanceRecord[];
 }
 
 export const DatabaseShieldModal: React.FC<DatabaseShieldModalProps> = ({
   isOpen,
   onClose,
   onRefreshData,
+  attendanceRecords,
 }) => {
   const [dbStatus, setDbStatus] = useState<any>(null);
   const [firebaseStatus, setFirebaseStatus] = useState<any>(null);
@@ -84,9 +89,63 @@ export const DatabaseShieldModal: React.FC<DatabaseShieldModalProps> = ({
     try {
       const res = await api.createManualBackup();
       await loadStatus();
-      setActionFeedback(`สร้างจุดสำรองสำเร็จ: ${res.backupFile}`);
+      const cloudTag = res.firebaseStored ? ` และจัดเก็บลง Firebase (${res.projectId || 'smart-time-ca6f9'})` : '';
+      setActionFeedback(`สร้างจุดสำรองสำเร็จ: ${res.backupFile}${cloudTag}`);
     } catch (err: any) {
       setActionFeedback(err.message || 'ไม่สามารถสร้างจุดสำรองได้');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  // Handle Backup to Firebase + Download JSON file
+  const handleBackupToFirebaseAndDownloadJson = async () => {
+    setIsLoading(true);
+    setActionFeedback(null);
+    try {
+      const res = await api.createManualBackup();
+      const exportRes = await freshFetch(api.getBackupDownloadUrl());
+      if (!exportRes.ok) {
+        throw new Error('ไม่สามารถดาวน์โหลดไฟล์สำรอง JSON ได้');
+      }
+      const jsonBlob = await exportRes.blob();
+      const nowStr = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+      const url = URL.createObjectURL(jsonBlob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `smart-time-backup-${nowStr}.json`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+
+      await loadStatus();
+      const cloudMsg = res.firebaseStored
+        ? `จัดเก็บลง Firebase (${res.projectId || 'smart-time-ca6f9'}) และดาวน์โหลดไฟล์ JSON เรียบร้อยแล้ว`
+        : 'สร้างจุดสำรองและดาวน์โหลดไฟล์ JSON เรียบร้อยแล้ว';
+      setActionFeedback(cloudMsg);
+    } catch (err: any) {
+      setActionFeedback(err?.message || 'ไม่สามารถสำรองและดาวน์โหลดไฟล์ JSON ได้');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  // Handle PDF Report Download
+  const handleDownloadPDF = async () => {
+    setIsLoading(true);
+    setActionFeedback(null);
+    try {
+      const recs = attendanceRecords ?? (await api.getAttendance());
+      const dateStr = new Date().toISOString().split('T')[0];
+      await exportToPDF(
+        recs,
+        `SmartTime-Backup-Report-${dateStr}.pdf`,
+        'รายงานบันทึกเวลาเข้า-ออกงาน (Smart Time Attendance)'
+      );
+      setActionFeedback(`สร้างและดาวน์โหลดไฟล์ PDF เรียบร้อยแล้ว (${recs.length} รายการ)`);
+    } catch (err: any) {
+      setActionFeedback(err?.message || 'ไม่สามารถสร้างไฟล์ PDF ได้');
     } finally {
       setIsLoading(false);
     }
@@ -332,15 +391,26 @@ export const DatabaseShieldModal: React.FC<DatabaseShieldModalProps> = ({
               </button>
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-              <a
-                href={api.getBackupDownloadUrl()}
-                download
-                className="py-2.5 px-3 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 rounded-xl text-xs font-semibold flex items-center justify-center gap-2 transition cursor-pointer shadow-2xs"
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+              <button
+                type="button"
+                onClick={handleBackupToFirebaseAndDownloadJson}
+                disabled={isLoading}
+                className="py-2.5 px-3 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 rounded-xl text-xs font-semibold flex items-center justify-center gap-2 transition cursor-pointer shadow-2xs disabled:opacity-50"
               >
                 <Download className="w-3.5 h-3.5 text-emerald-600" />
-                <span>ดาวน์โหลดไฟล์สำรอง (.json)</span>
-              </a>
+                <span>สำรองข้อมูล (.json) ลง Firebase</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={handleDownloadPDF}
+                disabled={isLoading}
+                className="py-2.5 px-3 bg-rose-50 hover:bg-rose-100 text-rose-800 border border-rose-200 rounded-xl text-xs font-semibold flex items-center justify-center gap-2 transition cursor-pointer shadow-2xs disabled:opacity-50"
+              >
+                <FileText className="w-3.5 h-3.5 text-rose-600" />
+                <span>ดาวน์โหลดรายงาน (.pdf)</span>
+              </button>
 
               <button
                 type="button"
@@ -349,7 +419,7 @@ export const DatabaseShieldModal: React.FC<DatabaseShieldModalProps> = ({
                 className="py-2.5 px-3 bg-slate-50 hover:bg-slate-100 text-slate-700 border border-slate-200 rounded-xl text-xs font-semibold flex items-center justify-center gap-2 transition cursor-pointer disabled:opacity-50"
               >
                 <HardDrive className="w-3.5 h-3.5 text-indigo-600" />
-                <span>สร้างจุด Snapshot สำรอง</span>
+                <span>สร้าง Snapshot สำรอง</span>
               </button>
             </div>
           </div>

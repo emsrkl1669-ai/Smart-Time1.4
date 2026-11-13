@@ -27,9 +27,10 @@ import {
   PlusCircle,
   Clock,
   UserCheck,
+  FileText,
 } from 'lucide-react';
 import { api } from '../services/api';
-import { exportToExcel, exportToCSV } from '../utils/export';
+import { exportToExcel, exportToCSV, exportToPDF } from '../utils/export';
 
 interface AdminAttendanceTableProps {
   records: AttendanceRecord[];
@@ -57,6 +58,7 @@ export const AdminAttendanceTable: React.FC<AdminAttendanceTableProps> = ({
   // Protection, Backup, Restore & Demo Cleanup States
   const [isCleaningDemo, setIsCleaningDemo] = useState(false);
   const [isBackingUp, setIsBackingUp] = useState(false);
+  const [isExportingPdf, setIsExportingPdf] = useState(false);
   const [showRestoreModal, setShowRestoreModal] = useState(false);
   const [restoreJsonInput, setRestoreJsonInput] = useState('');
   const [isRestoring, setIsRestoring] = useState(false);
@@ -66,7 +68,7 @@ export const AdminAttendanceTable: React.FC<AdminAttendanceTableProps> = ({
   } | null>(null);
 
   // Modals
-  const [selectedPhoto, setSelectedPhoto] = useState<string | null>(null);
+  const [selectedPhotoRecord, setSelectedPhotoRecord] = useState<AttendanceRecord | null>(null);
   const [selectedLocation, setSelectedLocation] = useState<{
     lat: number;
     lng: number;
@@ -272,14 +274,19 @@ export const AdminAttendanceTable: React.FC<AdminAttendanceTableProps> = ({
       const a = document.createElement('a');
       a.href = url;
       a.download = `attendance-records-backup-${dateTag}.json`;
+      document.body.appendChild(a);
       a.click();
+      document.body.removeChild(a);
       URL.revokeObjectURL(url);
 
+      const cloudNote = res.firebaseStored
+        ? ` และจัดเก็บลง Firebase (${res.projectId || 'smart-time-ca6f9'})`
+        : '';
       setFeedbackToast({
         type: 'success',
-        message: `สร้างจุดสำรองประวัติการลงเวลาสำเร็จ (${res.totalRecords} รายการ) และดาวน์โหลดไฟล์ JSON เรียบร้อยแล้ว`,
+        message: `สำรองข้อมูลสำเร็จ (${res.totalRecords} รายการ)${cloudNote} พร้อมดาวน์โหลดไฟล์ JSON เรียบร้อยแล้ว`,
       });
-      setTimeout(() => setFeedbackToast(null), 4500);
+      setTimeout(() => setFeedbackToast(null), 5000);
     } catch (err: any) {
       setFeedbackToast({
         type: 'error',
@@ -287,6 +294,27 @@ export const AdminAttendanceTable: React.FC<AdminAttendanceTableProps> = ({
       });
     } finally {
       setIsBackingUp(false);
+    }
+  };
+
+  const handleExportPDFClick = async () => {
+    setIsExportingPdf(true);
+    try {
+      const targetRecords = filteredRecords.length > 0 ? filteredRecords : records;
+      const filename = `รายงานการลงเวลา_${new Date().toISOString().split('T')[0]}.pdf`;
+      await exportToPDF(targetRecords, filename, 'รายงานการลงเวลาเข้า-ออกงาน (Smart Time)');
+      setFeedbackToast({
+        type: 'success',
+        message: `สร้างและดาวน์โหลดไฟล์ PDF เรียบร้อยแล้ว (${targetRecords.length} รายการ)`,
+      });
+      setTimeout(() => setFeedbackToast(null), 4000);
+    } catch (err: any) {
+      setFeedbackToast({
+        type: 'error',
+        message: err?.message || 'ไม่สามารถสร้างไฟล์ PDF ได้',
+      });
+    } finally {
+      setIsExportingPdf(false);
     }
   };
 
@@ -298,6 +326,17 @@ export const AdminAttendanceTable: React.FC<AdminAttendanceTableProps> = ({
   const handleExportCSVClick = () => {
     const filename = `รายงานการลงเวลา_${new Date().toISOString().split('T')[0]}.csv`;
     exportToCSV(filteredRecords.length > 0 ? filteredRecords : records, filename);
+  };
+
+  const handleDownloadPhoto = (rec: AttendanceRecord) => {
+    if (!rec.photo) return;
+    const safeName = (rec.userName || 'photo').replace(/[^a-zA-Z0-9ก-๙_-]/g, '_');
+    const a = document.createElement('a');
+    a.href = rec.photo;
+    a.download = `SmartTime-${safeName}-${rec.date || 'capture'}-${(rec.time || '').replace(/:/g, '')}.jpg`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
   };
 
   const handleRestoreSubmit = async (e: React.FormEvent) => {
@@ -402,10 +441,21 @@ export const AdminAttendanceTable: React.FC<AdminAttendanceTableProps> = ({
             onClick={handleInstantBackup}
             disabled={isBackingUp}
             className="px-3 py-1.5 rounded-xl text-xs font-bold bg-white hover:bg-slate-50 text-indigo-700 border border-indigo-200 shadow-2xs transition inline-flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
-            title="สร้างจุดสำรองฐานข้อมูลและดาวน์โหลด JSON"
+            title="สำรองข้อมูลเก็บไว้ที่ Firebase Cloud Firestore และดาวน์โหลดไฟล์ JSON"
           >
             <Download className="w-3.5 h-3.5 text-indigo-600" />
-            {isBackingUp ? 'กำลังสำรอง...' : 'สำรองข้อมูล (JSON)'}
+            {isBackingUp ? 'กำลังสำรองลง Firebase...' : 'สำรองข้อมูล (JSON)'}
+          </button>
+
+          <button
+            type="button"
+            onClick={handleExportPDFClick}
+            disabled={isExportingPdf}
+            className="px-3 py-1.5 rounded-xl text-xs font-bold bg-white hover:bg-rose-50 text-rose-700 border border-rose-200 shadow-2xs transition inline-flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+            title="ดาวน์โหลดรายงานประวัติการลงเวลาเป็นไฟล์ PDF (.pdf)"
+          >
+            <FileText className="w-3.5 h-3.5 text-rose-600" />
+            {isExportingPdf ? 'กำลังสร้าง PDF...' : 'ดาวน์โหลด PDF'}
           </button>
 
           <button
@@ -721,15 +771,17 @@ export const AdminAttendanceTable: React.FC<AdminAttendanceTableProps> = ({
                       {r.photo ? (
                         <button
                           type="button"
-                          onClick={() => setSelectedPhoto(r.photo)}
-                          className="relative w-10 h-10 rounded-lg overflow-hidden border border-slate-200 inline-block group cursor-pointer shadow-2xs"
-                          title="คลิกเพื่อดูรูปขนาดใหญ่"
+                          onClick={() => setSelectedPhotoRecord(r)}
+                          className="relative w-16 h-10 rounded-lg overflow-hidden border border-slate-200 inline-block group cursor-pointer shadow-2xs bg-slate-900"
+                          title="คลิกเพื่อขยายภาพมุมกว้างคมชัดและดาวน์โหลด"
                         >
-                          <img src={r.photo} alt={r.userName} className="w-full h-full object-cover group-hover:scale-110 transition" />
-                          <div className="absolute inset-0 bg-black/10 group-hover:bg-transparent" />
+                          <img src={r.photo} alt={r.userName} className="w-full h-full object-cover group-hover:scale-105 transition" />
+                          <div className="absolute inset-0 bg-black/10 group-hover:bg-transparent flex items-center justify-center opacity-0 group-hover:opacity-100 transition">
+                            <Eye className="w-4 h-4 text-white drop-shadow" />
+                          </div>
                         </button>
                       ) : (
-                        <div className="w-10 h-10 rounded-lg bg-slate-200 inline-flex items-center justify-center text-slate-400">
+                        <div className="w-16 h-10 rounded-lg bg-slate-200 inline-flex items-center justify-center text-slate-400">
                           <ImageIcon className="w-4 h-4" />
                         </div>
                       )}
@@ -870,31 +922,79 @@ export const AdminAttendanceTable: React.FC<AdminAttendanceTableProps> = ({
         </table>
       </div>
 
-      {/* Modal: Full Photo */}
-      {selectedPhoto && (
-        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white rounded-3xl max-w-sm w-full overflow-hidden shadow-2xl relative">
-            <div className="p-4 flex items-center justify-between border-b border-slate-100">
-              <h4 className="text-sm font-bold text-slate-800">รูปภาพเซลฟี่ที่ลงเวลา</h4>
+      {/* Modal: Wide-Angle Crisp Photo Viewer + Direct Download */}
+      {selectedPhotoRecord && (
+        <div
+          className="fixed inset-0 z-50 bg-black/85 backdrop-blur-xs flex items-center justify-center p-3 sm:p-6"
+          onClick={() => setSelectedPhotoRecord(null)}
+        >
+          <div
+            className="bg-white rounded-3xl max-w-5xl w-full overflow-hidden shadow-2xl relative border border-slate-200 flex flex-col max-h-[94vh]"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="p-4 sm:px-6 flex items-center justify-between border-b border-slate-100 bg-slate-50">
+              <div className="min-w-0">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <h4 className="text-sm sm:text-base font-bold text-slate-900 truncate">
+                    {selectedPhotoRecord.userName}
+                  </h4>
+                  <span
+                    className={`px-2 py-0.5 rounded-full text-[11px] font-bold ${
+                      selectedPhotoRecord.type === 'check_in'
+                        ? 'bg-emerald-100 text-emerald-800'
+                        : 'bg-rose-100 text-rose-800'
+                    }`}
+                  >
+                    {selectedPhotoRecord.type === 'check_in' ? '🟢 เข้างาน' : '🔴 ออกงาน'}
+                  </span>
+                  <span className="text-xs font-mono text-slate-500">
+                    {selectedPhotoRecord.date} • {selectedPhotoRecord.time} น.
+                  </span>
+                </div>
+                <p className="text-xs text-slate-500 truncate mt-0.5 flex items-center gap-1">
+                  <MapPin className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                  <span className="truncate">{selectedPhotoRecord.locationName}</span>
+                </p>
+              </div>
               <button
                 type="button"
-                onClick={() => setSelectedPhoto(null)}
-                className="p-1 text-slate-400 hover:text-slate-600 rounded-lg"
+                onClick={() => setSelectedPhotoRecord(null)}
+                className="p-2 text-slate-400 hover:text-slate-700 hover:bg-slate-200/70 rounded-xl transition cursor-pointer shrink-0"
+                title="ปิดหน้าต่าง"
               >
                 <X className="w-5 h-5" />
               </button>
             </div>
-            <div className="p-3 bg-slate-900">
-              <img src={selectedPhoto} alt="ยืนยันตัวตน" className="w-full max-h-[70vh] object-contain rounded-xl" />
+
+            <div className="p-3 sm:p-5 bg-slate-950 flex items-center justify-center overflow-auto flex-1">
+              <img
+                src={selectedPhotoRecord.photo}
+                alt={`รูปภาพยืนยันตัวตน ${selectedPhotoRecord.userName}`}
+                className="w-full h-auto max-h-[75vh] object-contain rounded-2xl shadow-2xl"
+              />
             </div>
-            <div className="p-3 bg-slate-50 text-center">
-              <button
-                type="button"
-                onClick={() => setSelectedPhoto(null)}
-                className="px-4 py-1.5 bg-slate-800 text-white text-xs rounded-xl hover:bg-slate-900 transition"
-              >
-                ปิดหน้าต่าง
-              </button>
+
+            <div className="p-3.5 sm:px-6 bg-slate-50 border-t border-slate-100 flex flex-wrap items-center justify-between gap-2">
+              <div className="text-xs text-slate-500 font-mono">
+                GPS: {selectedPhotoRecord.latitude?.toFixed(6)}, {selectedPhotoRecord.longitude?.toFixed(6)}
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => handleDownloadPhoto(selectedPhotoRecord)}
+                  className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded-xl transition flex items-center gap-1.5 shadow-sm cursor-pointer"
+                >
+                  <Download className="w-4 h-4" />
+                  <span>ดาวน์โหลดรูปภาพ (.jpg)</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSelectedPhotoRecord(null)}
+                  className="px-4 py-2 bg-slate-800 hover:bg-slate-900 text-white text-xs font-semibold rounded-xl transition cursor-pointer"
+                >
+                  ปิดหน้าต่าง
+                </button>
+              </div>
             </div>
           </div>
         </div>

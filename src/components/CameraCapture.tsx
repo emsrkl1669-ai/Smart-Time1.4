@@ -1,17 +1,94 @@
 import React, { useRef, useState, useEffect, useCallback } from 'react';
-import { Camera, RefreshCw, CheckCircle2, AlertCircle, SwitchCamera, ShieldCheck, Lock, Radio } from 'lucide-react';
+import { Camera, RefreshCw, CheckCircle2, AlertCircle, SwitchCamera, ShieldCheck, MapPin } from 'lucide-react';
 import { getThaiDateTime } from '../utils/thaiTime';
+
+export interface CameraWatermarkInfo {
+  latitude?: number;
+  longitude?: number;
+  workLocationName?: string;
+  addressLine?: string;
+  userName?: string;
+}
 
 interface CameraCaptureProps {
   photo: string;
   onPhotoCaptured: (photoBase64: string) => void;
   onRetake: () => void;
+  watermarkInfo?: CameraWatermarkInfo;
+}
+
+// Wrap Thai / English text smoothly by canvas pixel width (uses Intl.Segmenter for Thai word boundaries when supported)
+function wrapTextLines(ctx: CanvasRenderingContext2D, text: string, maxWidth: number, maxLines = 3): string[] {
+  if (!text) return [];
+  let segments: string[] = [];
+  try {
+    if (typeof Intl !== 'undefined' && (Intl as any).Segmenter) {
+      const seg = new (Intl as any).Segmenter('th', { granularity: 'word' });
+      segments = Array.from(seg.segment(text)).map((s: any) => s.segment);
+    } else {
+      segments = Array.from(text);
+    }
+  } catch {
+    segments = Array.from(text);
+  }
+
+  const lines: string[] = [];
+  let currentLine = '';
+
+  for (const seg of segments) {
+    const candidate = currentLine + seg;
+    if (ctx.measureText(candidate).width > maxWidth && currentLine.length > 0) {
+      lines.push(currentLine.trim());
+      currentLine = seg.trimStart();
+      if (lines.length >= maxLines - 1) {
+        // Put remainder on last line and truncate cleanly if needed
+        break;
+      }
+    } else {
+      currentLine = candidate;
+    }
+  }
+
+  // Handle remaining characters if broke early or finished loop
+  const consumedLen = lines.join('').length;
+  const remaining = lines.length >= maxLines - 1 ? text.slice(text.indexOf(currentLine) >= 0 ? text.indexOf(currentLine) : consumedLen).trim() : currentLine.trim();
+  if (remaining) {
+    let finalLine = remaining;
+    while (ctx.measureText(finalLine).width > maxWidth && finalLine.length > 6) {
+      finalLine = finalLine.slice(0, -4) + '...';
+    }
+    lines.push(finalLine);
+  }
+
+  return lines.slice(0, maxLines);
+}
+
+function drawRoundedRect(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  r: number
+) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.lineTo(x + w - r, y);
+  ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+  ctx.lineTo(x + w, y + h - r);
+  ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+  ctx.lineTo(x + r, y + h);
+  ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+  ctx.lineTo(x, y + r);
+  ctx.quadraticCurveTo(x, y, x + r, y);
+  ctx.closePath();
 }
 
 export const CameraCapture: React.FC<CameraCaptureProps> = ({
   photo,
   onPhotoCaptured,
   onRetake,
+  watermarkInfo,
 }) => {
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -37,13 +114,12 @@ export const CameraCapture: React.FC<CameraCaptureProps> = ({
     }
   }, [stream]);
 
-  // Start Live Camera stream
+  // Start Live Camera stream (Wide-angle 16:9 HD / Full HD for crisp zoomable captures)
   const startCamera = useCallback(async () => {
     setIsInitializing(true);
     setCameraError(null);
     setIsLiveReady(false);
 
-    // Stop existing stream if running
     if (stream) {
       stream.getTracks().forEach((track) => track.stop());
     }
@@ -58,8 +134,9 @@ export const CameraCapture: React.FC<CameraCaptureProps> = ({
       const constraints: MediaStreamConstraints = {
         video: {
           facingMode: { ideal: facingMode },
-          width: { ideal: 1280 },
-          height: { ideal: 720 },
+          width: { ideal: 1920, min: 1280 },
+          height: { ideal: 1080, min: 720 },
+          aspectRatio: { ideal: 16 / 9 },
         },
         audio: false,
       };
@@ -108,13 +185,13 @@ export const CameraCapture: React.FC<CameraCaptureProps> = ({
     setFacingMode((prev) => (prev === 'user' ? 'environment' : 'user'));
   };
 
-  // Capture Snapshot from Live Video
+  // Capture high-resolution wide-angle Snapshot from Live Video & burn Smart Time bottom-left watermark
   const handleCapture = () => {
     if (!videoRef.current || !canvasRef.current) return;
     const video = videoRef.current;
 
     if (video.videoWidth === 0 || video.videoHeight === 0) {
-      alert('กำลังเชื่อมต่อสัญญาณกล้องสด กรุณารอสักครู่แล้วกดถ่ายใหม่อีกครั้ง');
+      setCameraError('กำลังเชื่อมต่อสัญญาณกล้องสด กรุณารอสักครู่แล้วลองใหม่อีกครั้ง');
       return;
     }
 
@@ -122,13 +199,22 @@ export const CameraCapture: React.FC<CameraCaptureProps> = ({
     setTimeout(() => setFlashEffect(false), 200);
 
     const canvas = canvasRef.current;
-    canvas.width = video.videoWidth || 640;
-    canvas.height = video.videoHeight || 480;
+    const rawW = video.videoWidth || 1280;
+    const rawH = video.videoHeight || 720;
+
+    // Keep wide resolution crisp (up to 1600px wide, proportional height)
+    const maxTargetWidth = 1600;
+    const scale = rawW > maxTargetWidth ? maxTargetWidth / rawW : 1;
+    canvas.width = Math.round(rawW * scale);
+    canvas.height = Math.round(rawH * scale);
 
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
-    // Mirror image for front selfie camera
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
+
+    // Mirror image horizontally for front selfie camera
     if (facingMode === 'user') {
       ctx.translate(canvas.width, 0);
       ctx.scale(-1, 1);
@@ -136,27 +222,119 @@ export const CameraCapture: React.FC<CameraCaptureProps> = ({
 
     ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
 
-    // Reset transform for watermark overlay
+    // Reset transform so watermark text is readable (not mirrored)
     ctx.setTransform(1, 0, 0, 1, 0, 0);
 
-    // Thai Real-Time watermark with security verification badge
+    // Build watermark strings (Smart Time, Coordinates, Lat/Lon, Time, Full Street Address)
     const thai = getThaiDateTime();
-    const stamp = `${thai.formattedDateTime} (GMT+7)`;
+    const latText =
+      watermarkInfo?.latitude !== undefined ? watermarkInfo.latitude.toFixed(6) : '13.578107';
+    const lonText =
+      watermarkInfo?.longitude !== undefined ? watermarkInfo.longitude.toFixed(6) : '100.594069';
+    const pinName = watermarkInfo?.workLocationName || 'จุดปฏิบัติงาน Smart Time';
+    const rawAddress = watermarkInfo?.addressLine || pinName;
+    const cleanAddress = rawAddress.includes('•')
+      ? rawAddress.split('•').slice(1).join('•').trim()
+      : rawAddress;
 
-    // Draw Dark Overlay Banner
-    ctx.fillStyle = 'rgba(15, 23, 42, 0.75)';
-    ctx.fillRect(8, canvas.height - 48, Math.min(380, canvas.width - 16), 40);
+    // Scale typography cleanly relative to canvas width
+    const uiScale = Math.max(0.85, canvas.width / 1280);
+    const padX = Math.round(18 * uiScale);
+    const padY = Math.round(14 * uiScale);
+    const margin = Math.round(16 * uiScale);
+    const maxBoxW = Math.min(Math.round(canvas.width * 0.72), Math.round(760 * uiScale));
+    const contentW = maxBoxW - padX * 2;
 
-    // Watermark Texts
-    ctx.fillStyle = '#10b981'; // emerald-500
-    ctx.font = 'bold 11px Kanit, sans-serif';
-    ctx.fillText('🔴 LIVE CAMERA VERIFIED • ถ่ายจากกล้องสด', 18, canvas.height - 30);
+    const brandFontSize = Math.round(20 * uiScale);
+    const lineFontSize = Math.round(14 * uiScale);
+    const smallFontSize = Math.round(13 * uiScale);
+    const lineGap = Math.round(21 * uiScale);
+    const smallGap = Math.round(19 * uiScale);
 
+    ctx.font = `500 ${smallFontSize}px Kanit, "Noto Sans Thai", sans-serif`;
+    const addressLines = wrapTextLines(ctx, `สถานที่: ${cleanAddress}`, contentW, 2);
+
+    ctx.font = `600 ${lineFontSize}px Kanit, "Noto Sans Thai", sans-serif`;
+    const coordLines = wrapTextLines(ctx, `พิกัดที่ถ่ายรูป: ${pinName}`, contentW, 2);
+
+    // Total lines height calculation
+    const headerH = Math.round(28 * uiScale);
+    const timeAndLatLonRows = 2; // Row 1: Time, Row 2: Lat/Lon
+    const boxH =
+      padY * 2 +
+      headerH +
+      timeAndLatLonRows * lineGap +
+      coordLines.length * lineGap +
+      addressLines.length * smallGap +
+      Math.round(4 * uiScale);
+
+    const boxX = margin;
+    const boxY = Math.max(margin, canvas.height - margin - boxH);
+
+    // Subtle dark gradient backdrop at bottom-left + rounded glass card
+    const grad = ctx.createLinearGradient(0, boxY - 30, 0, canvas.height);
+    grad.addColorStop(0, 'rgba(2, 6, 23, 0)');
+    grad.addColorStop(1, 'rgba(2, 6, 23, 0.55)');
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, boxY - 30, canvas.width, canvas.height - (boxY - 30));
+
+    ctx.fillStyle = 'rgba(15, 23, 42, 0.82)';
+    drawRoundedRect(ctx, boxX, boxY, maxBoxW, boxH, Math.round(12 * uiScale));
+    ctx.fill();
+
+    // Accent left emerald bar & border
+    ctx.strokeStyle = 'rgba(16, 185, 129, 0.65)';
+    ctx.lineWidth = Math.max(1.5, 2 * uiScale);
+    ctx.stroke();
+
+    ctx.fillStyle = '#10b981';
+    drawRoundedRect(ctx, boxX, boxY, Math.round(5 * uiScale), boxH, Math.round(3 * uiScale));
+    ctx.fill();
+
+    let curY = boxY + padY + brandFontSize * 0.85;
+    const textX = boxX + padX + Math.round(4 * uiScale);
+
+    // Line 1: Smart Time Brand + Verified Stamp
+    ctx.fillStyle = '#34d399';
+    ctx.font = `700 ${brandFontSize}px Kanit, "Noto Sans Thai", sans-serif`;
+    ctx.fillText('Smart Time', textX, curY);
+
+    const brandW = ctx.measureText('Smart Time').width;
+    ctx.fillStyle = '#e2e8f0';
+    ctx.font = `500 ${Math.round(12 * uiScale)}px Kanit, "Noto Sans Thai", sans-serif`;
+    ctx.fillText('  •  LIVE CAMERA VERIFIED', textX + brandW, curY - Math.round(1 * uiScale));
+
+    curY += Math.round(24 * uiScale);
+
+    // Line 2: Thai Standard Date & Time
     ctx.fillStyle = '#ffffff';
-    ctx.font = 'bold 12px Kanit, sans-serif';
-    ctx.fillText(`🕒 ${stamp}`, 18, canvas.height - 14);
+    ctx.font = `600 ${lineFontSize}px Kanit, "Noto Sans Thai", sans-serif`;
+    ctx.fillText(`เวลา: ${thai.fullThaiDate} ${thai.timeStr} น. (GMT+7)`, textX, curY);
+    curY += lineGap;
 
-    const dataUrl = canvas.toDataURL('image/jpeg', 0.88);
+    // Line 3: Capture Pin / Location Name
+    ctx.fillStyle = '#bae6fd';
+    ctx.font = `600 ${lineFontSize}px Kanit, "Noto Sans Thai", sans-serif`;
+    for (const cLine of coordLines) {
+      ctx.fillText(cLine, textX, curY);
+      curY += lineGap;
+    }
+
+    // Line 4: Latitude - Longitude
+    ctx.fillStyle = '#fde68a';
+    ctx.font = `600 ${lineFontSize}px monospace`;
+    ctx.fillText(`ละติจูด-ลองติจูด: ${latText}, ${lonText}`, textX, curY);
+    curY += lineGap;
+
+    // Line 5+: Detailed Street / Subdistrict Address
+    ctx.fillStyle = '#f1f5f9';
+    ctx.font = `400 ${smallFontSize}px Kanit, "Noto Sans Thai", sans-serif`;
+    for (const aLine of addressLines) {
+      ctx.fillText(aLine, textX, curY);
+      curY += smallGap;
+    }
+
+    const dataUrl = canvas.toDataURL('image/jpeg', 0.92);
 
     // Stop live stream after photo taken
     stopStream();
@@ -168,6 +346,14 @@ export const CameraCapture: React.FC<CameraCaptureProps> = ({
     onRetake();
   };
 
+  const thaiLive = getThaiDateTime();
+  const previewLat =
+    watermarkInfo?.latitude !== undefined ? watermarkInfo.latitude.toFixed(6) : '13.578107';
+  const previewLon =
+    watermarkInfo?.longitude !== undefined ? watermarkInfo.longitude.toFixed(6) : '100.594069';
+  const previewPin = watermarkInfo?.workLocationName || 'จุดปฏิบัติงาน Smart Time';
+  const previewAddr = watermarkInfo?.addressLine || previewPin;
+
   return (
     <div className="w-full select-none">
       <canvas ref={canvasRef} className="hidden" />
@@ -176,37 +362,37 @@ export const CameraCapture: React.FC<CameraCaptureProps> = ({
       <div className="mb-2 px-3 py-1.5 bg-amber-50 border border-amber-200/80 rounded-xl flex items-center justify-between text-[11px] text-amber-900">
         <div className="flex items-center gap-1.5 font-medium">
           <ShieldCheck className="w-3.5 h-3.5 text-amber-600 shrink-0" />
-          <span>ระบบถ่ายภาพสด (LIVE CAMERA ONLY)</span>
+          <span>ระบบถ่ายภาพสดมุมกว้าง HD (LIVE CAMERA ONLY)</span>
         </div>
         <span className="text-[10px] bg-amber-200/70 text-amber-900 px-2 py-0.5 rounded-full font-semibold">
-          ห้ามอัปโหลดจากแกลเลอรี
+          ประทับลายน้ำ GPS
         </span>
       </div>
 
       {photo ? (
-        // Preview Captured Photo
-        <div className="relative rounded-2xl overflow-hidden border-2 border-emerald-500 bg-slate-900 shadow-md">
-          <img src={photo} alt="รูปถ่ายยืนยันตัวตนสด" className="w-full h-64 object-cover" />
-          
-          <div className="absolute top-3 left-3 bg-emerald-600/95 backdrop-blur-xs text-white text-xs px-3 py-1 rounded-full flex items-center gap-1.5 font-medium shadow-xs">
-            <CheckCircle2 className="w-3.5 h-3.5 text-white" /> ถ่ายจากกล้องสดเรียบร้อย
-          </div>
+        // Preview Captured Crisp Wide-Angle Photo (bottom-left watermark unobstructed)
+        <div className="relative rounded-2xl overflow-hidden border-2 border-emerald-500 bg-slate-900 shadow-md aspect-video">
+          <img
+            src={photo}
+            alt="รูปถ่ายยืนยันตัวตนสด"
+            className="w-full h-full object-cover"
+          />
 
-          <div className="absolute bottom-3 left-3 bg-black/60 backdrop-blur-xs text-white text-[11px] px-2.5 py-1 rounded-lg flex items-center gap-1">
-            <Lock className="w-3 h-3 text-emerald-400" /> ตรวจสอบแล้ว: ไม่ใช่รูปจากคลังภาพ
+          <div className="absolute top-3 left-3 bg-emerald-600/95 backdrop-blur-xs text-white text-xs px-3 py-1 rounded-full flex items-center gap-1.5 font-medium shadow-xs">
+            <CheckCircle2 className="w-3.5 h-3.5 text-white" /> ถ่ายจากกล้องสด & ประทับพิกัดแล้ว
           </div>
 
           <button
             type="button"
             onClick={handleRetake}
-            className="absolute bottom-3 right-3 bg-white/95 hover:bg-white text-slate-800 text-xs px-3.5 py-2 rounded-xl font-semibold shadow-md flex items-center gap-1.5 transition active:scale-95 cursor-pointer"
+            className="absolute top-3 right-3 bg-white/95 hover:bg-white text-slate-800 text-xs px-3.5 py-2 rounded-xl font-semibold shadow-md flex items-center gap-1.5 transition active:scale-95 cursor-pointer"
           >
             <RefreshCw className="w-3.5 h-3.5" /> ถ่ายใหม่
           </button>
         </div>
       ) : (
-        // Live Camera Viewfinder
-        <div className="relative rounded-2xl overflow-hidden bg-slate-950 border border-slate-800 shadow-inner h-64 sm:h-72 flex flex-col items-center justify-center">
+        // Live Wide-Angle Camera Viewfinder
+        <div className="relative rounded-2xl overflow-hidden bg-slate-950 border border-slate-800 shadow-inner aspect-video min-h-[240px] sm:min-h-[280px] flex flex-col items-center justify-center">
           {/* Flash animation */}
           {flashEffect && <div className="absolute inset-0 bg-white z-30 animate-out fade-out duration-200" />}
 
@@ -230,14 +416,14 @@ export const CameraCapture: React.FC<CameraCaptureProps> = ({
                 <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75"></span>
                 <span className="relative inline-flex rounded-full h-2 w-2 bg-red-500"></span>
               </span>
-              <span className="font-semibold tracking-wide">LIVE สด</span>
+              <span className="font-semibold tracking-wide">LIVE มุมกว้าง</span>
             </div>
           </div>
 
           {/* Oval Face Guide */}
           <div className="absolute inset-0 pointer-events-none flex items-center justify-center">
-            <div className="w-40 h-52 sm:w-44 sm:h-56 rounded-full border-2 border-dashed border-emerald-400/70 shadow-[0_0_0_9999px_rgba(0,0,0,0.40)] flex items-center justify-center">
-              <span className="text-[11px] text-white/90 font-medium tracking-wide bg-black/60 px-3 py-1 rounded-full backdrop-blur-xs border border-white/15">
+            <div className="w-36 h-44 sm:w-44 sm:h-52 rounded-full border-2 border-dashed border-emerald-400/70 shadow-[0_0_0_9999px_rgba(0,0,0,0.32)] flex items-center justify-center">
+              <span className="text-[10px] sm:text-[11px] text-white/90 font-medium tracking-wide bg-black/55 px-2.5 py-0.5 rounded-full backdrop-blur-xs border border-white/15">
                 จัดใบหน้าให้อยู่ในกรอบ
               </span>
             </div>
@@ -276,24 +462,41 @@ export const CameraCapture: React.FC<CameraCaptureProps> = ({
             </div>
           )}
 
-          {/* Bottom Live Shutter Control */}
-          <div className="absolute bottom-3 inset-x-0 flex items-center justify-center z-20 pointer-events-auto">
-            <div className="flex flex-col items-center gap-1">
+          {/* Bottom Bar: Left Live Watermark Preview + Right Shutter Button (non-overlapping) */}
+          <div className="absolute bottom-2.5 inset-x-2.5 z-20 flex items-end justify-between gap-2 pointer-events-none">
+            <div className="bg-slate-950/80 backdrop-blur-md border border-emerald-400/40 border-l-4 border-l-emerald-400 rounded-xl px-2.5 py-1.5 text-white max-w-[68%] sm:max-w-[72%] space-y-0.5 shadow-lg">
+              <div className="flex items-center gap-1.5 text-[11px] font-bold text-emerald-300 leading-tight">
+                <span>Smart Time</span>
+                <span className="text-[9px] text-slate-300 font-normal">• {thaiLive.timeStr} น.</span>
+              </div>
+              <div className="text-[10px] text-sky-200 font-medium truncate flex items-center gap-1">
+                <MapPin className="w-2.5 h-2.5 text-emerald-400 shrink-0" />
+                <span className="truncate">{previewPin}</span>
+              </div>
+              <div className="text-[9px] font-mono text-amber-200 truncate">
+                Lat/Lon: {previewLat}, {previewLon}
+              </div>
+              <div className="text-[9px] text-slate-200 line-clamp-1">
+                {previewAddr}
+              </div>
+            </div>
+
+            <div className="flex flex-col items-center gap-1 pointer-events-auto shrink-0">
               <button
                 type="button"
                 onClick={handleCapture}
                 disabled={isInitializing || !!cameraError || !isLiveReady}
-                className="w-16 h-16 rounded-full bg-white hover:bg-slate-100 p-1 flex items-center justify-center shadow-xl active:scale-90 transition disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+                className="w-14 h-14 sm:w-16 sm:h-16 rounded-full bg-white hover:bg-slate-100 p-1 flex items-center justify-center shadow-xl active:scale-90 transition disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
                 title="กดเพื่อถ่ายรูปจากกล้องสด"
               >
                 <div className="w-full h-full rounded-full border-4 border-slate-900 flex items-center justify-center bg-white hover:bg-slate-50 transition">
-                  <div className="w-10 h-10 rounded-full bg-emerald-500 flex items-center justify-center shadow-inner">
-                    <Camera className="w-5 h-5 text-white" />
+                  <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-full bg-emerald-500 flex items-center justify-center shadow-inner">
+                    <Camera className="w-4 h-4 sm:w-5 sm:h-5 text-white" />
                   </div>
                 </div>
               </button>
-              <span className="text-[11px] font-medium text-white/90 drop-shadow-md">
-                กดปุ่มเพื่อถ่ายภาพสด
+              <span className="text-[10px] font-medium text-white/95 drop-shadow-md">
+                กดถ่ายภาพ
               </span>
             </div>
           </div>

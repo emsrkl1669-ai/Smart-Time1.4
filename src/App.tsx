@@ -638,6 +638,7 @@ export default function App() {
           isOpen={isDbShieldModalOpen}
           onClose={() => setIsDbShieldModalOpen(false)}
           onRefreshData={handleManualRefresh}
+          attendanceRecords={attendance}
         />
       )}
     </div>

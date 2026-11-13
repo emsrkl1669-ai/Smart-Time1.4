@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { LogIn, LogOut, Clock, Calendar, CheckCircle, ShieldAlert, Sparkles, Building2, Bell, MapPin, Smartphone } from 'lucide-react';
 import { User, AttendanceType, WorkLocation } from '../types';
 import { CameraCapture } from './CameraCapture';
-import { LocationPicker } from './LocationPicker';
+import { LocationPicker, LocationData } from './LocationPicker';
 import { api, isOnline } from '../services/api';
 import { getThaiDateTime } from '../utils/thaiTime';
 
@@ -22,16 +22,7 @@ export const CheckInCard: React.FC<CheckInCardProps> = ({
   
   // Check-In Form State
   const [photo, setPhoto] = useState<string>('');
-  const [location, setLocation] = useState<{
-    latitude: number;
-    longitude: number;
-    accuracy?: number;
-    locationName: string;
-    selectedWorkLocationId?: string;
-    selectedWorkLocationName?: string;
-    isWithinGeofence?: boolean;
-    distanceMeters?: number;
-  } | null>(null);
+  const [location, setLocation] = useState<LocationData | null>(null);
   const [isLocLoading, setIsLocLoading] = useState(false);
   const [note, setNote] = useState('');
   
@@ -62,12 +53,20 @@ export const CheckInCard: React.FC<CheckInCardProps> = ({
 
   const handleSubmit = async (type: AttendanceType) => {
     if (!photo) {
-      alert('กรุณาถ่ายรูปเซลฟี่เพื่อยืนยันตัวตนก่อนบันทึกเวลา');
+      setStatusFeedback({
+        type: 'error',
+        title: 'ยังไม่ได้ถ่ายภาพยืนยันตัวตน',
+        message: 'กรุณาถ่ายรูปเซลฟี่จากกล้องสดก่อนกดลงเวลา',
+      });
       return;
     }
 
     if (!location) {
-      alert('กำลังค้นหาพิกัด GPS กรุณารอสักครู่แล้วลองใหม่อีกครั้ง');
+      setStatusFeedback({
+        type: 'error',
+        title: 'กำลังค้นหาพิกัด GPS',
+        message: 'กรุณารอสักครู่ให้ระบบดึงพิกัดสถานที่ปฏิบัติงานแล้วลองใหม่อีกครั้ง',
+      });
       return;
     }
 
@@ -224,6 +223,13 @@ export const CheckInCard: React.FC<CheckInCardProps> = ({
               photo={photo}
               onPhotoCaptured={(data) => setPhoto(data)}
               onRetake={() => setPhoto('')}
+              watermarkInfo={{
+                latitude: location?.deviceLatitude ?? location?.latitude,
+                longitude: location?.deviceLongitude ?? location?.longitude,
+                workLocationName: location?.selectedWorkLocationName,
+                addressLine: location?.detailedAddress || location?.locationName,
+                userName: currentUser.fullName,
+              }}
             />
           </div>
 

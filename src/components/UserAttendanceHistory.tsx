@@ -1,18 +1,29 @@
 import React, { useState } from 'react';
 import { AttendanceRecord } from '../types';
-import { Clock, MapPin, Calendar, ExternalLink, X, Image as ImageIcon, WifiOff, CheckCircle2 } from 'lucide-react';
+import { Clock, MapPin, Calendar, ExternalLink, X, Image as ImageIcon, WifiOff, Download } from 'lucide-react';
 
 interface UserAttendanceHistoryProps {
   records: AttendanceRecord[];
 }
 
 export const UserAttendanceHistory: React.FC<UserAttendanceHistoryProps> = ({ records }) => {
-  const [selectedPhoto, setSelectedPhoto] = useState<string | null>(null);
+  const [selectedPhotoRecord, setSelectedPhotoRecord] = useState<AttendanceRecord | null>(null);
   const [selectedLocation, setSelectedLocation] = useState<{
     lat: number;
     lng: number;
     name: string;
   } | null>(null);
+
+  const handleDownloadPhoto = (rec: AttendanceRecord) => {
+    if (!rec.photo) return;
+    const safeName = (rec.userName || 'photo').replace(/[^a-zA-Z0-9ก-๙_-]/g, '_');
+    const a = document.createElement('a');
+    a.href = rec.photo;
+    a.download = `SmartTime-${safeName}-${rec.date || 'capture'}-${(rec.time || '').replace(/:/g, '')}.jpg`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+  };
 
   return (
     <div className="bg-white rounded-3xl border border-slate-200/90 p-5 sm:p-6 shadow-xs">
@@ -47,15 +58,15 @@ export const UserAttendanceHistory: React.FC<UserAttendanceHistoryProps> = ({ re
                   {rec.photo ? (
                     <button
                       type="button"
-                      onClick={() => setSelectedPhoto(rec.photo)}
-                      className="relative w-12 h-12 rounded-xl overflow-hidden shrink-0 border border-slate-200 group cursor-pointer shadow-xs"
-                      title="ดูรูปภาพขนาดเต็ม"
+                      onClick={() => setSelectedPhotoRecord(rec)}
+                      className="relative w-16 h-10 rounded-xl overflow-hidden shrink-0 border border-slate-200 group cursor-pointer shadow-xs bg-slate-900"
+                      title="ดูรูปภาพมุมกว้างคมชัดและดาวน์โหลด"
                     >
-                      <img src={rec.photo} alt={rec.userName} className="w-full h-full object-cover group-hover:scale-110 transition" />
-                      <div className="absolute inset-0 bg-black/20 group-hover:bg-transparent transition" />
+                      <img src={rec.photo} alt={rec.userName} className="w-full h-full object-cover group-hover:scale-105 transition" />
+                      <div className="absolute inset-0 bg-black/15 group-hover:bg-transparent transition" />
                     </button>
                   ) : (
-                    <div className="w-12 h-12 rounded-xl bg-slate-200 flex items-center justify-center shrink-0 text-slate-400">
+                    <div className="w-16 h-10 rounded-xl bg-slate-200 flex items-center justify-center shrink-0 text-slate-400">
                       <ImageIcon className="w-5 h-5" />
                     </div>
                   )}
@@ -130,28 +141,51 @@ export const UserAttendanceHistory: React.FC<UserAttendanceHistoryProps> = ({ re
         </div>
       )}
 
-      {/* Full Photo Modal */}
-      {selectedPhoto && (
-        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white rounded-3xl max-w-sm w-full overflow-hidden shadow-2xl relative animate-in fade-in zoom-in-95 duration-200">
-            <div className="p-4 flex items-center justify-between border-b border-slate-100">
-              <h4 className="text-sm font-bold text-slate-800">รูปถ่ายยืนยันตัวตน</h4>
+      {/* Full Wide Crisp Photo Modal */}
+      {selectedPhotoRecord && (
+        <div
+          className="fixed inset-0 z-50 bg-black/85 backdrop-blur-xs flex items-center justify-center p-3 sm:p-6"
+          onClick={() => setSelectedPhotoRecord(null)}
+        >
+          <div
+            className="bg-white rounded-3xl max-w-4xl w-full overflow-hidden shadow-2xl relative flex flex-col max-h-[92vh]"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="p-4 sm:px-6 flex items-center justify-between border-b border-slate-100 bg-slate-50">
+              <div>
+                <h4 className="text-sm font-bold text-slate-800">
+                  รูปถ่ายยืนยันตัวตน ({selectedPhotoRecord.date} • {selectedPhotoRecord.time} น.)
+                </h4>
+                <p className="text-xs text-slate-500 truncate">{selectedPhotoRecord.locationName}</p>
+              </div>
               <button
                 type="button"
-                onClick={() => setSelectedPhoto(null)}
-                className="p-1 text-slate-400 hover:text-slate-600 rounded-lg hover:bg-slate-100"
+                onClick={() => setSelectedPhotoRecord(null)}
+                className="p-1.5 text-slate-400 hover:text-slate-600 rounded-lg hover:bg-slate-100 cursor-pointer"
               >
                 <X className="w-5 h-5" />
               </button>
             </div>
-            <div className="p-3 bg-slate-900">
-              <img src={selectedPhoto} alt="ยืนยันตัวตน" className="w-full max-h-[70vh] object-contain rounded-xl" />
+            <div className="p-3 sm:p-5 bg-slate-950 flex items-center justify-center flex-1 overflow-auto">
+              <img
+                src={selectedPhotoRecord.photo}
+                alt="ยืนยันตัวตน"
+                className="w-full h-auto max-h-[75vh] object-contain rounded-2xl"
+              />
             </div>
-            <div className="p-3 bg-slate-50 text-center">
+            <div className="p-3.5 sm:px-6 bg-slate-50 border-t border-slate-100 flex items-center justify-end gap-2">
               <button
                 type="button"
-                onClick={() => setSelectedPhoto(null)}
-                className="px-4 py-1.5 bg-slate-800 text-white text-xs rounded-xl hover:bg-slate-900 transition"
+                onClick={() => handleDownloadPhoto(selectedPhotoRecord)}
+                className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded-xl transition flex items-center gap-1.5 cursor-pointer"
+              >
+                <Download className="w-4 h-4" />
+                <span>ดาวน์โหลดรูปภาพ (.jpg)</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setSelectedPhotoRecord(null)}
+                className="px-4 py-2 bg-slate-800 text-white text-xs rounded-xl hover:bg-slate-900 transition cursor-pointer"
               >
                 ปิดหน้าต่าง
               </button>

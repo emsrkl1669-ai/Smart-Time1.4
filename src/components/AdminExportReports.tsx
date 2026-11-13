@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { AttendanceRecord, Department } from '../types';
 import { FileSpreadsheet, FileText, Printer, Download, Filter, Calendar, Users, Building2, CheckCircle2 } from 'lucide-react';
-import { exportToExcel, exportToCSV, printAttendanceReport } from '../utils/export';
+import { exportToExcel, exportToCSV, exportToPDF } from '../utils/export';
 
 interface AdminExportReportsProps {
   records: AttendanceRecord[];
@@ -17,6 +17,7 @@ export const AdminExportReports: React.FC<AdminExportReportsProps> = ({
   const [dateRangeMode, setDateRangeMode] = useState<'today' | '7days' | 'month' | 'custom' | 'all'>('7days');
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
+  const [isExportingPdf, setIsExportingPdf] = useState(false);
 
   // Date calculation
   const now = new Date();
@@ -57,8 +58,14 @@ export const AdminExportReports: React.FC<AdminExportReportsProps> = ({
     exportToCSV(filteredRecords, filename);
   };
 
-  const handlePrint = () => {
-    printAttendanceReport(filteredRecords, 'รายงานการลงเวลาเข้า-ออกงานและภารกิจ');
+  const handlePrint = async () => {
+    setIsExportingPdf(true);
+    try {
+      const filename = `รายงานการลงเวลา_${new Date().toISOString().split('T')[0]}.pdf`;
+      await exportToPDF(filteredRecords, filename, 'รายงานการลงเวลาเข้า-ออกงานและภารกิจ');
+    } finally {
+      setIsExportingPdf(false);
+    }
   };
 
   return (
@@ -246,15 +253,15 @@ export const AdminExportReports: React.FC<AdminExportReportsProps> = ({
             <span>ดาวน์โหลด CSV (.csv)</span>
           </button>
 
-          {/* Print / PDF Button */}
+          {/* Direct PDF Download Button */}
           <button
             type="button"
-            disabled={filteredRecords.length === 0}
+            disabled={filteredRecords.length === 0 || isExportingPdf}
             onClick={handlePrint}
-            className="flex-1 sm:flex-initial px-4 py-2.5 bg-white/20 hover:bg-white/30 text-white text-xs font-bold rounded-xl flex items-center justify-center gap-1.5 transition shadow-sm active:scale-95 disabled:opacity-50 cursor-pointer"
+            className="flex-1 sm:flex-initial px-4 py-2.5 bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold rounded-xl flex items-center justify-center gap-1.5 transition shadow-sm active:scale-95 disabled:opacity-50 cursor-pointer"
           >
-            <Printer className="w-4 h-4" />
-            <span>พิมพ์รายงาน / PDF</span>
+            <FileText className="w-4 h-4" />
+            <span>{isExportingPdf ? 'กำลังสร้าง PDF...' : 'ดาวน์โหลด PDF (.pdf)'}</span>
           </button>
         </div>
       </div>

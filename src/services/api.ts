@@ -750,7 +750,15 @@ export const api = {
     return await res.json();
   },
 
-  async backupAttendanceSnapshot(): Promise<{ message: string; backupFile: string; totalRecords: number; timestamp: string }> {
+  async backupAttendanceSnapshot(): Promise<{
+    message: string;
+    backupFile: string;
+    backupId?: string;
+    firebaseStored?: boolean;
+    projectId?: string;
+    totalRecords: number;
+    timestamp: string;
+  }> {
     const res = await freshFetch('/api/attendance/backup-snapshot', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -887,7 +895,14 @@ export const api = {
     };
   },
 
-  async createManualBackup(): Promise<{ message: string; backupFile: string; timestamp: string }> {
+  async createManualBackup(): Promise<{
+    message: string;
+    backupFile: string;
+    backupId?: string;
+    firebaseStored?: boolean;
+    projectId?: string;
+    timestamp: string;
+  }> {
     const res = await freshFetch('/api/database/backup', { method: 'POST' });
     if (!res.ok) {
       throw new Error('ไม่สามารถสร้างจุดสำรองฐานข้อมูลได้');

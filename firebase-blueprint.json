@@ -121,6 +121,26 @@
         "responseDetails": { "type": "string" }
       },
       "required": ["id", "recordId", "userName", "type", "timestamp", "status"]
+    },
+    "BackupSnapshot": {
+      "title": "BackupSnapshot",
+      "description": "JSON database backup manifest and snapshot stored in Cloud Firestore",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "title": { "type": "string" },
+        "projectId": { "type": "string" },
+        "databaseId": { "type": "string" },
+        "createdAt": { "type": "string" },
+        "totalUsers": { "type": "number" },
+        "totalLocations": { "type": "number" },
+        "totalDepartments": { "type": "number" },
+        "totalAttendance": { "type": "number" },
+        "isChunked": { "type": "boolean" },
+        "totalChunks": { "type": "number" },
+        "jsonBackup": { "type": "string" }
+      },
+      "required": ["id", "title", "createdAt"]
     }
   },
   "firestore": {
@@ -147,6 +167,10 @@
     "/lineLogs/{logId}": {
       "schema": { "$ref": "#/entities/LineNotificationLog" },
       "description": "Collection of LINE notification logs"
+    },
+    "/backups/{backupId}": {
+      "schema": { "$ref": "#/entities/BackupSnapshot" },
+      "description": "Permanent JSON backup snapshots stored in Cloud Firestore"
     }
   }
 }
