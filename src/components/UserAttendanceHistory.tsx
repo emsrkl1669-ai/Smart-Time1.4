@@ -59,14 +59,14 @@ export const UserAttendanceHistory: React.FC<UserAttendanceHistoryProps> = ({ re
                     <button
                       type="button"
                       onClick={() => setSelectedPhotoRecord(rec)}
-                      className="relative w-16 h-10 rounded-xl overflow-hidden shrink-0 border border-slate-200 group cursor-pointer shadow-xs bg-slate-900"
-                      title="ดูรูปภาพมุมกว้างคมชัดและดาวน์โหลด"
+                      className="relative w-12 h-16 rounded-xl overflow-hidden shrink-0 border border-slate-200 group cursor-pointer shadow-xs bg-slate-900"
+                      title="ดูรูปภาพคมชัดและดาวน์โหลด"
                     >
                       <img src={rec.photo} alt={rec.userName} className="w-full h-full object-cover group-hover:scale-105 transition" />
                       <div className="absolute inset-0 bg-black/15 group-hover:bg-transparent transition" />
                     </button>
                   ) : (
-                    <div className="w-16 h-10 rounded-xl bg-slate-200 flex items-center justify-center shrink-0 text-slate-400">
+                    <div className="w-12 h-16 rounded-xl bg-slate-200 flex items-center justify-center shrink-0 text-slate-400">
                       <ImageIcon className="w-5 h-5" />
                     </div>
                   )}

@@ -454,6 +454,7 @@ export default function App() {
               <CheckInCard
                 currentUser={currentUser}
                 workLocations={locations}
+                enforceGeofence={Boolean(settings?.enforceLocationGeofence)}
                 onAttendanceSuccess={loadAllData}
               />
               <UserAttendanceHistory records={userAttendanceRecords} />
@@ -522,6 +523,7 @@ export default function App() {
           <CheckInCard
             currentUser={currentUser}
             workLocations={locations}
+            enforceGeofence={Boolean(settings?.enforceLocationGeofence)}
             onAttendanceSuccess={loadAllData}
           />
           <UserAttendanceHistory records={userAttendanceRecords} />

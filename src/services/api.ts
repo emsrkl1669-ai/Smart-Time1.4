@@ -123,12 +123,46 @@ export function getPublicAppUrl(): string {
   return origin;
 }
 
-// Local cache helpers
+// Local cache helpers (resilient against 5MB QuotaExceededError on iOS Safari / Android WebView)
 function setCache(key: string, data: any) {
   try {
-    localStorage.setItem(key, JSON.stringify(data));
+    const serialized = JSON.stringify(data);
+    try {
+      localStorage.setItem(key, serialized);
+    } catch {
+      // Evict heavy cached attendance photos first so auth/queue keys always persist
+      if (key !== STORAGE_KEYS.CACHED_ATTENDANCE) {
+        try {
+          const existingAtt = localStorage.getItem(STORAGE_KEYS.CACHED_ATTENDANCE);
+          if (existingAtt) {
+            const parsed = JSON.parse(existingAtt);
+            if (Array.isArray(parsed)) {
+              const stripped = parsed.slice(0, 15).map((r: any) => ({ ...r, photo: '' }));
+              localStorage.setItem(STORAGE_KEYS.CACHED_ATTENDANCE, JSON.stringify(stripped));
+            } else {
+              localStorage.removeItem(STORAGE_KEYS.CACHED_ATTENDANCE);
+            }
+          }
+          localStorage.setItem(key, serialized);
+          return;
+        } catch {
+          try {
+            localStorage.removeItem(STORAGE_KEYS.CACHED_ATTENDANCE);
+            localStorage.setItem(key, serialized);
+            return;
+          } catch {}
+        }
+      } else if (Array.isArray(data)) {
+        // Store fewer / lightweight attendance items when quota is tight
+        try {
+          const slim = data.slice(0, 12).map((r: any) => ({ ...r, photo: '' }));
+          localStorage.setItem(key, JSON.stringify(slim));
+          return;
+        } catch {}
+      }
+    }
   } catch (e) {
-    console.error('Cache save error', e);
+    console.warn('Cache save warning:', e);
   }
 }
 
@@ -291,8 +325,16 @@ export const api = {
 
   // Auth: Login with remember device option + Cloud Firestore & cross-browser fallback
   async login(username: string, password: string, rememberDevice: boolean = true): Promise<AuthResponse> {
-    const cleanIdentifier = String(username || '').trim().replace(/^@+/, '');
-    const cleanPassword = String(password ?? '').trim();
+    const normalizeText = (val: string) => {
+      const cleaned = String(val || '').replace(/[\u200B-\u200D\uFEFF]/g, '').trim();
+      try {
+        return cleaned.normalize('NFC');
+      } catch {
+        return cleaned;
+      }
+    };
+    const cleanIdentifier = normalizeText(username).replace(/^@+/, '');
+    const cleanPassword = normalizeText(password);
 
     if (!cleanIdentifier || !cleanPassword) {
       throw new Error('กรุณากรอก Username และ Password');
@@ -306,14 +348,16 @@ export const api = {
 
     if (isOnline()) {
       try {
-        const controller = new AbortController();
-        const timer = setTimeout(() => controller.abort(), 9000);
+        const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+        const timer = controller ? setTimeout(() => controller.abort(), 3500) : null;
         const res = await fetch('/api/auth/login', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-cache' },
           body: JSON.stringify({ username: cleanIdentifier, password: cleanPassword }),
-          signal: controller.signal,
-        }).finally(() => clearTimeout(timer));
+          signal: controller?.signal,
+        }).finally(() => {
+          if (timer) clearTimeout(timer);
+        });
 
         const contentType = res.headers.get('content-type') || '';
         const isJson = contentType.includes('application/json');

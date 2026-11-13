@@ -1,6 +1,7 @@
 import { initializeApp, getApps, getApp } from 'firebase/app';
 import {
   getFirestore,
+  initializeFirestore,
   doc,
   getDoc,
   getDocFromServer,
@@ -26,10 +27,21 @@ import {
 // Initialize Firebase App
 export const app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApp();
 
-// Initialize Firestore with configured database ID
-export const db: Firestore = firebaseConfig.firestoreDatabaseId
-  ? getFirestore(app, firebaseConfig.firestoreDatabaseId)
-  : getFirestore(app);
+// Initialize Firestore with auto long-polling detection for universal iOS, Android, and In-App Browser support
+function createFirestoreInstance(): Firestore {
+  const dbId = firebaseConfig.firestoreDatabaseId || undefined;
+  try {
+    return initializeFirestore(
+      app,
+      { experimentalAutoDetectLongPolling: true },
+      dbId
+    );
+  } catch {
+    return dbId ? getFirestore(app, dbId) : getFirestore(app);
+  }
+}
+
+export const db: Firestore = createFirestoreInstance();
 
 export enum OperationType {
   CREATE = 'create',
@@ -166,35 +178,123 @@ export async function testFirestoreConnection(): Promise<{ success: boolean; err
   }
 }
 
+function parseFirestoreRestValue(val: any): any {
+  if (!val || typeof val !== 'object') return val;
+  if ('stringValue' in val) return val.stringValue;
+  if ('integerValue' in val) return Number(val.integerValue);
+  if ('doubleValue' in val) return Number(val.doubleValue);
+  if ('booleanValue' in val) return Boolean(val.booleanValue);
+  if ('nullValue' in val) return null;
+  if ('timestampValue' in val) return val.timestampValue;
+  if ('arrayValue' in val) {
+    return Array.isArray(val.arrayValue?.values)
+      ? val.arrayValue.values.map(parseFirestoreRestValue)
+      : [];
+  }
+  if ('mapValue' in val) {
+    const out: Record<string, any> = {};
+    const fields = val.mapValue?.fields || {};
+    for (const [k, v] of Object.entries(fields)) {
+      out[k] = parseFirestoreRestValue(v);
+    }
+    return out;
+  }
+  return val;
+}
+
+function parseFirestoreRestDoc(docObj: any): Record<string, any> | null {
+  if (!docObj?.fields) return null;
+  const parsed: Record<string, any> = {};
+  for (const [k, v] of Object.entries(docObj.fields)) {
+    parsed[k] = parseFirestoreRestValue(v);
+  }
+  return parsed;
+}
+
+async function fetchCollectionViaRest<T>(collectionName: string): Promise<T[] | null> {
+  try {
+    const dbId = encodeURIComponent(firebaseConfig.firestoreDatabaseId || '(default)');
+    const projectId = encodeURIComponent(firebaseConfig.projectId);
+    const key = encodeURIComponent(firebaseConfig.apiKey || '');
+    const url = `https://firestore.googleapis.com/v1/projects/${projectId}/databases/${dbId}/documents/${encodeURIComponent(collectionName)}?pageSize=300&key=${key}`;
+    const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+    const timer = controller ? setTimeout(() => controller.abort(), 9000) : null;
+    const res = await fetch(url, {
+      method: 'GET',
+      cache: 'no-store',
+      signal: controller?.signal,
+    }).finally(() => {
+      if (timer) clearTimeout(timer);
+    });
+    if (!res.ok) return null;
+    const json = await res.json();
+    const docs = Array.isArray(json?.documents) ? json.documents : [];
+    const results: T[] = [];
+    for (const d of docs) {
+      const parsed = parseFirestoreRestDoc(d);
+      if (parsed) results.push(parsed as T);
+    }
+    return results;
+  } catch {
+    return null;
+  }
+}
+
+function normalizeIdentifierText(input: string): string {
+  const raw = String(input || '');
+  const stripped = raw.replace(/[\u200B-\u200D\uFEFF]/g, '').trim().replace(/^@+/, '');
+  try {
+    return stripped.normalize('NFC');
+  } catch {
+    return stripped;
+  }
+}
+
 /**
- * Authenticate directly against Cloud Firestore `users` collection.
- * Supports login by username (case-insensitive), employeeCode, or Thai fullName.
+ * Authenticate directly against Cloud Firestore `users` collection (with automatic REST fallback).
+ * Supports login by username (case-insensitive), employeeCode, fullName, or phoneNumber across all mobile browsers.
  */
 export async function authenticateWithFirestore(
   identifier: string,
   password: string
 ): Promise<AuthResponse> {
-  const rawIdentifier = String(identifier || '').trim().replace(/^@+/, '');
-  const lowerIdentifier = rawIdentifier.toLowerCase();
-  const compactIdentifier = rawIdentifier.replace(/\s+/g, '').toLowerCase();
-  const cleanPassword = String(password ?? '').trim();
+  const cleanIdentifier = normalizeIdentifierText(identifier);
+  const lowerIdentifier = cleanIdentifier.toLowerCase();
+  const compactIdentifier = cleanIdentifier.replace(/\s+/g, '').toLowerCase();
+  const digitsIdentifier = cleanIdentifier.replace(/\D/g, '');
+  const cleanPassword = normalizeIdentifierText(password);
 
-  const snap = await withTimeout(getDocs(collection(db, 'users')), 8000);
-  if (snap.empty) {
+  let users: User[] = [];
+  try {
+    const snap = await withTimeout(getDocs(collection(db, 'users')), 10000);
+    if (!snap.empty) {
+      snap.forEach((d) => users.push(d.data() as User));
+    }
+  } catch {
+    // Fall back cleanly to Firestore REST API for legacy browsers / restricted networks
+  }
+
+  if (users.length === 0) {
+    const restUsers = await fetchCollectionViaRest<User>('users');
+    if (restUsers && restUsers.length > 0) {
+      users = restUsers;
+    }
+  }
+
+  if (users.length === 0) {
     throw new Error('ไม่พบข้อมูลบัญชีผู้ใช้ในฐานข้อมูล Cloud');
   }
 
-  const users: User[] = [];
-  snap.forEach((d) => users.push(d.data() as User));
-
   const matched = users.find((u) => {
-    const uName = String(u.username || '').trim().toLowerCase();
-    const empCode = String(u.employeeCode || '').trim().toLowerCase();
-    const fullCompact = String(u.fullName || '').replace(/\s+/g, '').toLowerCase();
+    const uName = normalizeIdentifierText(u.username || '').toLowerCase();
+    const empCode = normalizeIdentifierText(u.employeeCode || '').toLowerCase();
+    const fullCompact = normalizeIdentifierText(u.fullName || '').replace(/\s+/g, '').toLowerCase();
+    const phoneDigits = String(u.phoneNumber || '').replace(/\D/g, '');
     return (
       uName === lowerIdentifier ||
       (empCode !== '' && empCode === lowerIdentifier) ||
-      (compactIdentifier !== '' && fullCompact === compactIdentifier)
+      (compactIdentifier !== '' && fullCompact === compactIdentifier) ||
+      (digitsIdentifier.length >= 9 && phoneDigits === digitsIdentifier)
     );
   });
 
@@ -203,8 +303,8 @@ export async function authenticateWithFirestore(
   }
 
   const storedPass =
-    matched.password !== undefined && matched.password !== null && String(matched.password).trim() !== ''
-      ? String(matched.password).trim()
+    matched.password !== undefined && matched.password !== null && normalizeIdentifierText(String(matched.password)) !== ''
+      ? normalizeIdentifierText(String(matched.password))
       : matched.username === 'admin'
       ? 'admin123'
       : '123456';
@@ -242,6 +342,15 @@ export async function verifyUserWithFirestore(
     const { password: _, ...safeUser } = raw;
     return { checked: true, valid: true, user: safeUser };
   } catch {
+    const restUsers = await fetchCollectionViaRest<User>('users');
+    if (restUsers && restUsers.length > 0) {
+      const found = restUsers.find((u) => u.id === userId);
+      if (!found || found.status === 'inactive') {
+        return { checked: true, valid: false, user: null };
+      }
+      const { password: _, ...safeUser } = found;
+      return { checked: true, valid: true, user: safeUser };
+    }
     return { checked: false, valid: true, user: null };
   }
 }
@@ -249,52 +358,67 @@ export async function verifyUserWithFirestore(
 export async function getUsersFromFirestore(): Promise<User[] | null> {
   try {
     const snap = await withTimeout(getDocs(collection(db, 'users')), 7000);
-    if (snap.empty) return null;
-    const list: User[] = [];
-    snap.forEach((d) => {
-      const { password: _, ...safeUser } = d.data() as User;
-      list.push(safeUser);
-    });
-    return list;
+    if (!snap.empty) {
+      const list: User[] = [];
+      snap.forEach((d) => {
+        const { password: _, ...safeUser } = d.data() as User;
+        list.push(safeUser);
+      });
+      return list;
+    }
   } catch {
-    return null;
+    // fallback to REST
   }
+  const restUsers = await fetchCollectionViaRest<User>('users');
+  if (restUsers && restUsers.length > 0) {
+    return restUsers.map(({ password: _, ...safe }) => safe);
+  }
+  return null;
 }
 
 export async function getUsersWithPasswordsFromFirestore(): Promise<(User & { password?: string })[] | null> {
   try {
     const snap = await withTimeout(getDocs(collection(db, 'users')), 7000);
-    if (snap.empty) return null;
-    const list: (User & { password?: string })[] = [];
-    snap.forEach((d) => list.push(d.data() as User & { password?: string }));
-    return list;
+    if (!snap.empty) {
+      const list: (User & { password?: string })[] = [];
+      snap.forEach((d) => list.push(d.data() as User & { password?: string }));
+      return list;
+    }
   } catch {
-    return null;
+    // fallback to REST
   }
+  const restUsers = await fetchCollectionViaRest<User & { password?: string }>('users');
+  return restUsers && restUsers.length > 0 ? restUsers : null;
 }
 
 export async function getDepartmentsFromFirestore(): Promise<Department[] | null> {
   try {
     const snap = await withTimeout(getDocs(collection(db, 'departments')), 7000);
-    if (snap.empty) return null;
-    const list: Department[] = [];
-    snap.forEach((d) => list.push(d.data() as Department));
-    return list;
+    if (!snap.empty) {
+      const list: Department[] = [];
+      snap.forEach((d) => list.push(d.data() as Department));
+      return list;
+    }
   } catch {
-    return null;
+    // fallback to REST
   }
+  const restDepts = await fetchCollectionViaRest<Department>('departments');
+  return restDepts && restDepts.length > 0 ? restDepts : null;
 }
 
 export async function getLocationsFromFirestore(): Promise<WorkLocation[] | null> {
   try {
     const snap = await withTimeout(getDocs(collection(db, 'locations')), 7000);
-    if (snap.empty) return null;
-    const list: WorkLocation[] = [];
-    snap.forEach((d) => list.push(d.data() as WorkLocation));
-    return list;
+    if (!snap.empty) {
+      const list: WorkLocation[] = [];
+      snap.forEach((d) => list.push(d.data() as WorkLocation));
+      return list;
+    }
   } catch {
-    return null;
+    // fallback to REST
   }
+  const restLocs = await fetchCollectionViaRest<WorkLocation>('locations');
+  return restLocs && restLocs.length > 0 ? restLocs : null;
 }
 
 export async function getAttendanceFromFirestore(params?: {
@@ -1097,39 +1221,35 @@ export async function createAttendanceInFirestore(payload: {
     const locs = (await getLocationsFromFirestore()) || [];
     const now = payload.customTimestamp ? new Date(payload.customTimestamp) : new Date();
     const thai = getThaiDateTime(now);
-    const recordLat = Number(payload.latitude) || 13.7563;
-    const recordLon = Number(payload.longitude) || 100.5018;
+    const recordLat = Number(payload.latitude) || 13.5781067;
+    const recordLon = Number(payload.longitude) || 100.594069;
 
-    let matchedLoc: WorkLocation | undefined;
-    if (payload.workLocationId) {
-      matchedLoc = locs.find((l) => l.id === payload.workLocationId);
-    } else if (targetUser.assignedLocationId) {
-      matchedLoc = locs.find((l) => l.id === targetUser!.assignedLocationId);
-    }
+    // Enforce single mandatory check-in point: LOC-BUALUANG-HQ
+    const mandatoryFallback: WorkLocation = {
+      id: 'loc_bualuang_hq',
+      name: 'มูลนิธิร่วมกุศล สมุทรปราการ (ศูนย์วิทยุบัวหลวง กู้ชีพกู้ภัย)',
+      code: 'LOC-BUALUANG-HQ',
+      address: '57/1 ซอยท้ายบ้าน 17, ตำบลปากน้ำ, เทศบาลนครสมุทรปราการ, อำเภอเมืองสมุทรปราการ, จังหวัดสมุทรปราการ 10290',
+      latitude: 13.5781067,
+      longitude: 100.594069,
+      radiusMeters: 200,
+      departmentId: 'all',
+      departmentName: 'ทุกแผนก (ใช้ร่วมกัน)',
+      isActive: true,
+      createdAt: '2026-01-01T08:00:00.000Z',
+    };
 
-    if (!matchedLoc && locs.length > 0) {
-      let minDist = Infinity;
-      locs.forEach((loc) => {
-        if (!loc.isActive) return;
-        const d = calculateDistanceMetersLocal(recordLat, recordLon, loc.latitude, loc.longitude);
-        if (d < minDist) {
-          minDist = d;
-          matchedLoc = loc;
-        }
-      });
-    }
+    const matchedLoc: WorkLocation =
+      locs.find((l) => l.id === 'loc_bualuang_hq' || l.code === 'LOC-BUALUANG-HQ') ||
+      mandatoryFallback;
 
-    let calculatedDistance: number | undefined;
-    let isWithinGeofence = false;
-    if (matchedLoc) {
-      calculatedDistance = calculateDistanceMetersLocal(
-        recordLat,
-        recordLon,
-        matchedLoc.latitude,
-        matchedLoc.longitude
-      );
-      isWithinGeofence = calculatedDistance <= (matchedLoc.radiusMeters || 200);
-    }
+    const calculatedDistance = calculateDistanceMetersLocal(
+      recordLat,
+      recordLon,
+      matchedLoc.latitude,
+      matchedLoc.longitude
+    );
+    const isWithinGeofence = calculatedDistance <= (matchedLoc.radiusMeters || 200);
 
     let deviceOs: 'ios' | 'android' | 'desktop' | 'unknown' = 'desktop';
     if (typeof navigator !== 'undefined') {

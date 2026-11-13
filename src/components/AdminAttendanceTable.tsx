@@ -584,7 +584,7 @@ export const AdminAttendanceTable: React.FC<AdminAttendanceTableProps> = ({
         <div className="p-3 rounded-xl bg-sky-50/60 border border-sky-200 col-span-2 sm:col-span-1">
           <div className="text-[10px] font-semibold text-sky-700 uppercase tracking-wider">🎯 ในรัศมีจุดพิกัด (200ม.)</div>
           <div className="text-lg font-black text-sky-900 mt-0.5">{inGeofenceCount} <span className="text-xs font-normal text-sky-600">ครั้ง</span></div>
-          <div className="text-[10px] text-sky-600 mt-0.5">5 จุดมูลนิธิร่วมกุศลฯ</div>
+          <div className="text-[10px] text-sky-600 mt-0.5">จุดเดียว LOC-BUALUANG-HQ</div>
         </div>
       </div>
 
@@ -798,7 +798,7 @@ export const AdminAttendanceTable: React.FC<AdminAttendanceTableProps> = ({
                         <ShieldCheck className="w-3.5 h-3.5 text-emerald-600" /> บันทึกถาวร + ป้องกันสูญหาย
                       </span>
                       <span className="px-2.5 py-1 bg-slate-50 rounded-lg border border-slate-200 text-slate-700 font-medium inline-flex items-center gap-1">
-                        <MapPin className="w-3.5 h-3.5 text-indigo-600" /> พิกัด 5 จุด (200 ม.)
+                        <MapPin className="w-3.5 h-3.5 text-indigo-600" /> จุดเช็คอินเดียว LOC-BUALUANG-HQ (200 ม.)
                       </span>
                       <span className="px-2.5 py-1 bg-slate-50 rounded-lg border border-slate-200 text-slate-700 font-medium inline-flex items-center gap-1">
                         <Bell className="w-3.5 h-3.5 text-amber-600" /> แจ้งเตือน LINE อัตโนมัติ
@@ -825,8 +825,8 @@ export const AdminAttendanceTable: React.FC<AdminAttendanceTableProps> = ({
                         <button
                           type="button"
                           onClick={() => setSelectedPhotoRecord(r)}
-                          className="relative w-16 h-10 rounded-lg overflow-hidden border border-slate-200 inline-block group cursor-pointer shadow-2xs bg-slate-900"
-                          title="คลิกเพื่อขยายภาพมุมกว้างคมชัดและดาวน์โหลด"
+                          className="relative w-12 h-16 rounded-lg overflow-hidden border border-slate-200 inline-block group cursor-pointer shadow-2xs bg-slate-900"
+                          title="คลิกเพื่อขยายภาพคมชัดและดาวน์โหลด"
                         >
                           <img src={r.photo} alt={r.userName} className="w-full h-full object-cover group-hover:scale-105 transition" />
                           <div className="absolute inset-0 bg-black/10 group-hover:bg-transparent flex items-center justify-center opacity-0 group-hover:opacity-100 transition">
@@ -834,7 +834,7 @@ export const AdminAttendanceTable: React.FC<AdminAttendanceTableProps> = ({
                           </div>
                         </button>
                       ) : (
-                        <div className="w-16 h-10 rounded-lg bg-slate-200 inline-flex items-center justify-center text-slate-400">
+                        <div className="w-12 h-16 rounded-lg bg-slate-200 inline-flex items-center justify-center text-slate-400">
                           <ImageIcon className="w-4 h-4" />
                         </div>
                       )}

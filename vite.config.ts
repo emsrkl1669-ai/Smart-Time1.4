@@ -11,6 +11,10 @@ export default defineConfig(() => {
         '@': path.resolve(__dirname, '.'),
       },
     },
+    build: {
+      target: 'es2018',
+      cssTarget: 'chrome61',
+    },
     server: {
       // Allow all external hosts (Cloud Run, mobile devices, local networks, other machines)
       allowedHosts: true as const,

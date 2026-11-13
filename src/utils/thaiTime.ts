@@ -60,41 +60,62 @@ export function getThaiDateTime(dateInput?: Date | string | number): ThaiDateTim
     targetDate = new Date();
   }
 
-  // Use Intl.DateTimeFormat strictly with Asia/Bangkok
-  const thaiFormatter = new Intl.DateTimeFormat('en-US', {
-    timeZone: 'Asia/Bangkok',
-    year: 'numeric',
-    month: 'numeric',
-    day: 'numeric',
-    hour: 'numeric',
-    minute: 'numeric',
-    second: 'numeric',
-    hour12: false,
-    weekday: 'short',
-  });
+  let yearNum: number;
+  let monthNum: number;
+  let dayNum: number;
+  let hourPadded: string;
+  let minutePadded: string;
+  let secondPadded: string;
 
-  const parts = thaiFormatter.formatToParts(targetDate);
-  const partMap: Record<string, string> = {};
-  parts.forEach((p) => {
-    partMap[p.type] = p.value;
-  });
+  try {
+    // Use Intl.DateTimeFormat strictly with Asia/Bangkok
+    const thaiFormatter = new Intl.DateTimeFormat('en-US', {
+      timeZone: 'Asia/Bangkok',
+      year: 'numeric',
+      month: 'numeric',
+      day: 'numeric',
+      hour: 'numeric',
+      minute: 'numeric',
+      second: 'numeric',
+      hour12: false,
+    });
 
-  const yearNum = parseInt(partMap.year || `${targetDate.getFullYear()}`, 10);
-  const monthNum = parseInt(partMap.month || `${targetDate.getMonth() + 1}`, 10);
-  const dayNum = parseInt(partMap.day || `${targetDate.getDate()}`, 10);
+    const parts = thaiFormatter.formatToParts(targetDate);
+    const partMap: Record<string, string> = {};
+    parts.forEach((p) => {
+      partMap[p.type] = p.value;
+    });
 
-  let hour = partMap.hour || `${targetDate.getHours()}`;
-  if (hour === '24') hour = '00';
-  const hourPadded = hour.padStart(2, '0');
-  const minutePadded = (partMap.minute || `${targetDate.getMinutes()}`).padStart(2, '0');
-  const secondPadded = (partMap.second || `${targetDate.getSeconds()}`).padStart(2, '0');
+    yearNum = parseInt(partMap.year || '', 10);
+    monthNum = parseInt(partMap.month || '', 10);
+    dayNum = parseInt(partMap.day || '', 10);
+
+    if (isNaN(yearNum) || isNaN(monthNum) || isNaN(dayNum)) {
+      throw new Error('Fallback to UTC+7 math');
+    }
+
+    let hour = partMap.hour || '0';
+    if (hour === '24') hour = '00';
+    hourPadded = String(hour).padStart(2, '0');
+    minutePadded = String(partMap.minute || '0').padStart(2, '0');
+    secondPadded = String(partMap.second || '0').padStart(2, '0');
+  } catch {
+    // Pure UTC+7 arithmetic fallback for older Android WebView / iOS Safari
+    const bkkMs = targetDate.getTime() + 7 * 60 * 60 * 1000;
+    const bkkDate = new Date(bkkMs);
+    yearNum = bkkDate.getUTCFullYear();
+    monthNum = bkkDate.getUTCMonth() + 1;
+    dayNum = bkkDate.getUTCDate();
+    hourPadded = String(bkkDate.getUTCHours()).padStart(2, '0');
+    minutePadded = String(bkkDate.getUTCMinutes()).padStart(2, '0');
+    secondPadded = String(bkkDate.getUTCSeconds()).padStart(2, '0');
+  }
 
   const dateStr = `${yearNum}-${String(monthNum).padStart(2, '0')}-${String(dayNum).padStart(2, '0')}`;
   const timeStr = `${hourPadded}:${minutePadded}:${secondPadded}`;
 
-  // Weekday in Thai
-  const bangkokDate = new Date(targetDate.toLocaleString('en-US', { timeZone: 'Asia/Bangkok' }));
-  const dayIndex = isNaN(bangkokDate.getDay()) ? targetDate.getDay() : bangkokDate.getDay();
+  // Weekday in Thai computed deterministically via UTC calendar date (avoids iOS/Android toLocaleString bugs)
+  const dayIndex = new Date(Date.UTC(yearNum, monthNum - 1, dayNum)).getUTCDay();
   const dayName = THAI_DAYS[dayIndex] || 'วัน';
 
   const thaiYear = yearNum + 543;

@@ -357,21 +357,31 @@ const defaultDepartments: Department[] = [
   },
 ];
 
-// Initial Work Locations (Admin สามารถกำหนดตำแหน่งได้เอง)
+const MANDATORY_CHECKIN_LOCATION: WorkLocation = {
+  id: 'loc_bualuang_hq',
+  name: 'มูลนิธิร่วมกุศล สมุทรปราการ (ศูนย์วิทยุบัวหลวง กู้ชีพกู้ภัย)',
+  code: 'LOC-BUALUANG-HQ',
+  address: '57/1 ซอยท้ายบ้าน 17, ตำบลปากน้ำ, เทศบาลนครสมุทรปราการ, อำเภอเมืองสมุทรปราการ, จังหวัดสมุทรปราการ 10290',
+  latitude: 13.5781067,
+  longitude: 100.594069,
+  radiusMeters: 200,
+  departmentId: 'all',
+  departmentName: 'ทุกแผนก (ใช้ร่วมกัน)',
+  isActive: true,
+  createdAt: '2026-01-01T08:00:00.000Z',
+};
+
+function normalizeIdentifierText(val: unknown): string {
+  const raw = String(val ?? '')
+    .replace(/[\u200B-\u200D\uFEFF]/g, '')
+    .trim()
+    .replace(/^@+/, '');
+  return typeof raw.normalize === 'function' ? raw.normalize('NFC') : raw;
+}
+
+// Initial Work Locations (จุดเช็คอินหลักเพียงจุดเดียวสำหรับพนักงานทุกคน)
 const defaultLocations: WorkLocation[] = [
-  {
-    id: 'loc_bualuang_hq',
-    name: 'มูลนิธิร่วมกุศล สมุทรปราการ (ศูนย์วิทยุบัวหลวง กู้ชีพกู้ภัย)',
-    code: 'LOC-BUALUANG-HQ',
-    address: '57/1 ซอยท้ายบ้าน 17 , ตำบลปากน้ำ, เทศบาลนครสมุทรปราการ, อำเภอเมืองสมุทรปราการ, จังหวัดสมุทรปราการ, 10290, ประเทศไทย',
-    latitude: 13.5781067,
-    longitude: 100.594069,
-    radiusMeters: 200,
-    departmentId: 'all',
-    departmentName: 'ทุกแผนก(ใช้ร่วมกัน)',
-    isActive: true,
-    createdAt: '2026-01-01T08:00:00.000Z',
-  },
+  { ...MANDATORY_CHECKIN_LOCATION },
   {
     id: 'loc_kongpho',
     name: 'จุดโค้งโพธิ์ มูลนิธิร่วมกศลสมุทรปราการ (กู้ชีพ-กู้ภัย บัวหลวง)',
@@ -1209,28 +1219,32 @@ async function startServer() {
       return;
     }
 
-    const rawIdentifier = String(username).trim().replace(/^@+/, '');
+    const rawIdentifier = normalizeIdentifierText(username);
     const lowerIdentifier = rawIdentifier.toLowerCase();
     const compactIdentifier = rawIdentifier.replace(/\s+/g, '').toLowerCase();
-    const cleanPassword = String(password).trim();
+    const digitsIdentifier = rawIdentifier.replace(/\D/g, '');
+    const cleanPassword = normalizeIdentifierText(password);
 
     const findMatchingUser = (userList: User[]) => {
       return userList.find((u) => {
-        const uName = String(u.username || '').trim().toLowerCase();
-        const empCode = String(u.employeeCode || '').trim().toLowerCase();
-        const fullCompact = String(u.fullName || '').replace(/\s+/g, '').toLowerCase();
+        const uName = normalizeIdentifierText(u.username).toLowerCase();
+        const empCode = normalizeIdentifierText(u.employeeCode).toLowerCase();
+        const fullCompact = normalizeIdentifierText(u.fullName).replace(/\s+/g, '').toLowerCase();
+        const phoneDigits = String(u.phoneNumber || '').replace(/\D/g, '');
         return (
           uName === lowerIdentifier ||
           (empCode !== '' && empCode === lowerIdentifier) ||
-          (compactIdentifier !== '' && fullCompact === compactIdentifier)
+          (compactIdentifier !== '' && fullCompact === compactIdentifier) ||
+          (digitsIdentifier.length >= 6 && phoneDigits !== '' && phoneDigits === digitsIdentifier)
         );
       });
     };
 
     const verifyUserPassword = (u: User) => {
+      const normalizedStored = normalizeIdentifierText(u.password);
       const storedPass =
-        u.password !== undefined && u.password !== null && String(u.password).trim() !== ''
-          ? String(u.password).trim()
+        normalizedStored !== ''
+          ? normalizedStored
           : u.username === 'admin'
           ? 'admin123'
           : '123456';
@@ -2009,41 +2023,41 @@ async function startServer() {
       const dateStr = thai.dateStr;
       const timeStr = thai.timeStr;
 
-      const recordLat = Number(latitude) || 13.7563;
-      const recordLon = Number(longitude) || 100.5018;
+      const recordLat = Number(latitude) || MANDATORY_CHECKIN_LOCATION.latitude;
+      const recordLon = Number(longitude) || MANDATORY_CHECKIN_LOCATION.longitude;
 
-      // Find closest or selected work location
-      let matchedWorkLocation: WorkLocation | undefined;
-      let calculatedDistance: number | undefined;
-      let isWithinGeofence = false;
-
-      if (workLocationId) {
-        matchedWorkLocation = db.locations.find((l) => l.id === workLocationId);
-      } else if (user.assignedLocationId) {
-        matchedWorkLocation = db.locations.find((l) => l.id === user.assignedLocationId);
-      }
-
-      // If no explicit match, find closest location among active locations
-      if (!matchedWorkLocation && db.locations.length > 0) {
-        let minDistance = Infinity;
-        db.locations.forEach((loc) => {
-          if (!loc.isActive) return;
-          const d = calculateDistanceMeters(recordLat, recordLon, loc.latitude, loc.longitude);
-          if (d < minDistance) {
-            minDistance = d;
-            matchedWorkLocation = loc;
+      // Exclusive mandatory check-in location: LOC-BUALUANG-HQ (200m radius)
+      const dbHqLoc = db.locations.find(
+        (l) => l.id === MANDATORY_CHECKIN_LOCATION.id || l.code === MANDATORY_CHECKIN_LOCATION.code
+      );
+      const matchedWorkLocation: WorkLocation = dbHqLoc
+        ? {
+            ...MANDATORY_CHECKIN_LOCATION,
+            ...dbHqLoc,
+            name: dbHqLoc.name || MANDATORY_CHECKIN_LOCATION.name,
+            code: dbHqLoc.code || MANDATORY_CHECKIN_LOCATION.code,
+            address: MANDATORY_CHECKIN_LOCATION.address,
+            latitude: Number.isFinite(Number(dbHqLoc.latitude)) ? Number(dbHqLoc.latitude) : MANDATORY_CHECKIN_LOCATION.latitude,
+            longitude: Number.isFinite(Number(dbHqLoc.longitude)) ? Number(dbHqLoc.longitude) : MANDATORY_CHECKIN_LOCATION.longitude,
+            radiusMeters: Number(dbHqLoc.radiusMeters) > 0 ? Number(dbHqLoc.radiusMeters) : MANDATORY_CHECKIN_LOCATION.radiusMeters,
+            departmentId: 'all',
+            departmentName: 'ทุกแผนก (ใช้ร่วมกัน)',
           }
-        });
-      }
+        : MANDATORY_CHECKIN_LOCATION;
 
-      if (matchedWorkLocation) {
-        calculatedDistance = calculateDistanceMeters(
-          recordLat,
-          recordLon,
-          matchedWorkLocation.latitude,
-          matchedWorkLocation.longitude
-        );
-        isWithinGeofence = calculatedDistance <= (matchedWorkLocation.radiusMeters || 200);
+      const calculatedDistance = calculateDistanceMeters(
+        recordLat,
+        recordLon,
+        matchedWorkLocation.latitude,
+        matchedWorkLocation.longitude
+      );
+      const isWithinGeofence = calculatedDistance <= (matchedWorkLocation.radiusMeters || 200);
+
+      if (db.settings?.enforceLocationGeofence && !isWithinGeofence) {
+        res.status(400).json({
+          error: `อยู่นอกรัศมีจุดเช็คอิน ${matchedWorkLocation.name} (${calculatedDistance} ม. / กำหนดไม่เกิน ${matchedWorkLocation.radiusMeters || 200} ม.)`,
+        });
+        return;
       }
 
       // Detect OS from user-agent

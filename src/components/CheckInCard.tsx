@@ -9,12 +9,14 @@ import { getThaiDateTime } from '../utils/thaiTime';
 interface CheckInCardProps {
   currentUser: User;
   workLocations?: WorkLocation[];
+  enforceGeofence?: boolean;
   onAttendanceSuccess: () => void;
 }
 
 export const CheckInCard: React.FC<CheckInCardProps> = ({
   currentUser,
   workLocations = [],
+  enforceGeofence = false,
   onAttendanceSuccess,
 }) => {
   // Current Time State
@@ -56,7 +58,7 @@ export const CheckInCard: React.FC<CheckInCardProps> = ({
       setStatusFeedback({
         type: 'error',
         title: 'ยังไม่ได้ถ่ายภาพยืนยันตัวตน',
-        message: 'กรุณาถ่ายรูปเซลฟี่จากกล้องสดก่อนกดลงเวลา',
+        message: 'กรุณาถ่ายรูปใบหน้าแนวตั้งจากกล้องสดก่อนกดลงเวลา',
       });
       return;
     }
@@ -66,6 +68,15 @@ export const CheckInCard: React.FC<CheckInCardProps> = ({
         type: 'error',
         title: 'กำลังค้นหาพิกัด GPS',
         message: 'กรุณารอสักครู่ให้ระบบดึงพิกัดสถานที่ปฏิบัติงานแล้วลองใหม่อีกครั้ง',
+      });
+      return;
+    }
+
+    if (enforceGeofence && location.isWithinGeofence === false) {
+      setStatusFeedback({
+        type: 'error',
+        title: 'อยู่นอกรัศมีจุดเช็คอิน (200 เมตร)',
+        message: `คุณอยู่ห่างจาก ${location.selectedWorkLocationName || 'จุดเช็คอินหลัก'} ${location.distanceMeters ?? '-'} เมตร กรุณาเข้าพื้นที่ภายในรัศมี 200 เมตรแล้วลองใหม่อีกครั้ง`,
       });
       return;
     }
@@ -82,7 +93,7 @@ export const CheckInCard: React.FC<CheckInCardProps> = ({
         longitude: location.longitude,
         accuracy: location.accuracy,
         locationName: location.locationName,
-        workLocationId: location.selectedWorkLocationId,
+        workLocationId: location.selectedWorkLocationId || 'loc_bualuang_hq',
         note: note.trim(),
       });
 
@@ -129,11 +140,12 @@ export const CheckInCard: React.FC<CheckInCardProps> = ({
               <span className="text-xs bg-white/10 px-2.5 py-0.5 rounded-full text-slate-200 flex items-center gap-1">
                 <Building2 className="w-3 h-3 text-sky-400" /> {currentUser.departmentName}
               </span>
-              {currentUser.assignedLocationName && (
-                <span className="text-xs bg-white/10 px-2.5 py-0.5 rounded-full text-emerald-300 flex items-center gap-1">
-                  <MapPin className="w-3 h-3 text-emerald-400" /> {currentUser.assignedLocationName}
+              <span className="text-xs bg-white/10 px-2.5 py-0.5 rounded-full text-emerald-300 flex items-center gap-1">
+                <MapPin className="w-3 h-3 text-emerald-400 shrink-0" />
+                <span className="truncate max-w-[260px]">
+                  {location?.selectedWorkLocationName || 'มูลนิธิร่วมกุศล สมุทรปราการ (ศูนย์วิทยุบัวหลวง กู้ชีพกู้ภัย)'}
                 </span>
-              )}
+              </span>
             </div>
 
             <h2 className="text-xl sm:text-2xl font-bold tracking-tight">

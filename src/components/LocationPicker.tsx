@@ -76,11 +76,42 @@ function formatThaiNominatimAddress(address: any, displayName?: string): string 
   return combined || displayName || '';
 }
 
+export const MANDATORY_CHECKIN_LOCATION: WorkLocation = {
+  id: 'loc_bualuang_hq',
+  name: 'มูลนิธิร่วมกุศล สมุทรปราการ (ศูนย์วิทยุบัวหลวง กู้ชีพกู้ภัย)',
+  code: 'LOC-BUALUANG-HQ',
+  address: '57/1 ซอยท้ายบ้าน 17, ตำบลปากน้ำ, เทศบาลนครสมุทรปราการ, อำเภอเมืองสมุทรปราการ, จังหวัดสมุทรปราการ 10290',
+  latitude: 13.5781067,
+  longitude: 100.594069,
+  radiusMeters: 200,
+  departmentId: 'all',
+  departmentName: 'ทุกแผนก (ใช้ร่วมกัน)',
+  isActive: true,
+  createdAt: '2026-01-01T08:00:00.000Z',
+};
+
+function resolveMandatoryLocation(workLocations: WorkLocation[]): WorkLocation {
+  const fromDb = workLocations.find(
+    (w) => w.id === MANDATORY_CHECKIN_LOCATION.id || w.code === MANDATORY_CHECKIN_LOCATION.code
+  );
+  if (!fromDb) return MANDATORY_CHECKIN_LOCATION;
+  return {
+    ...MANDATORY_CHECKIN_LOCATION,
+    ...fromDb,
+    name: fromDb.name || MANDATORY_CHECKIN_LOCATION.name,
+    code: fromDb.code || MANDATORY_CHECKIN_LOCATION.code,
+    address: MANDATORY_CHECKIN_LOCATION.address,
+    latitude: Number.isFinite(Number(fromDb.latitude)) ? Number(fromDb.latitude) : MANDATORY_CHECKIN_LOCATION.latitude,
+    longitude: Number.isFinite(Number(fromDb.longitude)) ? Number(fromDb.longitude) : MANDATORY_CHECKIN_LOCATION.longitude,
+    radiusMeters: Number(fromDb.radiusMeters) > 0 ? Number(fromDb.radiusMeters) : MANDATORY_CHECKIN_LOCATION.radiusMeters,
+    departmentId: 'all',
+    departmentName: 'ทุกแผนก (ใช้ร่วมกัน)',
+  };
+}
+
 export const LocationPicker: React.FC<LocationPickerProps> = ({
   location,
   workLocations = [],
-  userAssignedLocationId,
-  userAssignedLocationName,
   onLocationUpdate,
   isLoading,
   setIsLoading,
@@ -96,23 +127,7 @@ export const LocationPicker: React.FC<LocationPickerProps> = ({
   const [resolvedAddress, setResolvedAddress] = useState<string>('');
   const lastGeocodedKeyRef = useRef<string>('');
 
-  // Determine initial selected Admin work location
-  const getInitialLocationId = (): string => {
-    if (userAssignedLocationId && workLocations.some((w) => w.id === userAssignedLocationId)) {
-      return userAssignedLocationId;
-    }
-    const firstActive = workLocations.find((w) => w.isActive);
-    return firstActive?.id || workLocations[0]?.id || '';
-  };
-
-  const [activeWorkLocationId, setActiveWorkLocationId] = useState<string>(getInitialLocationId);
-
-  // Update activeWorkLocationId if workLocations load or change and current selection is empty
-  useEffect(() => {
-    if (workLocations.length > 0 && (!activeWorkLocationId || !workLocations.some((w) => w.id === activeWorkLocationId))) {
-      setActiveWorkLocationId(getInitialLocationId());
-    }
-  }, [workLocations, userAssignedLocationId]);
+  const mandatoryLoc = resolveMandatoryLocation(workLocations);
 
   // Reverse geocode coordinates in Thai (House no., Road, Subdistrict, District, Province)
   const reverseGeocodeThai = async (lat: number, lon: number, fallbackAddr?: string): Promise<string> => {
@@ -121,11 +136,11 @@ export const LocationPicker: React.FC<LocationPickerProps> = ({
       return resolvedAddress;
     }
     try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 3500);
+      const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+      const timeoutId = controller ? setTimeout(() => controller.abort(), 3500) : null;
       const url = `https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${encodeURIComponent(lat)}&lon=${encodeURIComponent(lon)}&accept-language=th&addressdetails=1`;
-      const res = await fetch(url, { signal: controller.signal });
-      clearTimeout(timeoutId);
+      const res = await fetch(url, controller ? { signal: controller.signal } : undefined);
+      if (timeoutId) clearTimeout(timeoutId);
       if (res.ok) {
         const json = await res.json();
         const formatted = formatThaiNominatimAddress(json.address, json.display_name);
@@ -136,44 +151,17 @@ export const LocationPicker: React.FC<LocationPickerProps> = ({
         }
       }
     } catch {
-      // Fallback cleanly to Admin work location address if offline/rate-limited
+      // Fallback cleanly to mandatory work location address if offline/rate-limited
     }
     return fallbackAddr || '';
   };
 
-  // Apply the selected Admin work location pin to the attendance form
-  const applyAdminWorkLocationPin = (
-    chosenLocId: string,
+  // Apply the exclusive mandatory check-in location pin (LOC-BUALUANG-HQ)
+  const applyMandatoryWorkLocationPin = (
     currentDevice: { latitude: number; longitude: number; accuracy?: number } | null,
     overrideDetailedAddress?: string
   ) => {
-    if (workLocations.length === 0) {
-      // Fallback if no Admin work locations configured yet
-      const fallbackLat = currentDevice?.latitude || 13.5781067;
-      const fallbackLon = currentDevice?.longitude || 100.594069;
-      const defaultAddr =
-        '57/1 ซอยท้ายบ้าน 17, ต.ปากน้ำ, อ.เมืองสมุทรปราการ, จ.สมุทรปราการ 10290';
-      onLocationUpdate({
-        latitude: fallbackLat,
-        longitude: fallbackLon,
-        accuracy: currentDevice?.accuracy || 20,
-        locationName: 'มูลนิธิร่วมกุศล สมุทรปราการ (ศูนย์วิทยุบัวหลวง กู้ชีพกู้ภัย)',
-        isWithinGeofence: true,
-        deviceLatitude: currentDevice?.latitude ?? fallbackLat,
-        deviceLongitude: currentDevice?.longitude ?? fallbackLon,
-        detailedAddress: overrideDetailedAddress || resolvedAddress || defaultAddr,
-      });
-      return;
-    }
-
-    // Find the specific Admin work location
-    const targetLoc =
-      workLocations.find((w) => w.id === chosenLocId) ||
-      workLocations.find((w) => w.id === userAssignedLocationId) ||
-      workLocations.find((w) => w.isActive) ||
-      workLocations[0];
-
-    if (!targetLoc) return;
+    const targetLoc = resolveMandatoryLocation(workLocations);
 
     let distanceMeters: number | undefined;
     let isWithinGeofence = true;
@@ -193,7 +181,6 @@ export const LocationPicker: React.FC<LocationPickerProps> = ({
     const bestAddress =
       overrideDetailedAddress || resolvedAddress || targetLoc.address || targetLoc.name;
 
-    // PIN THE LOCATION STRICTLY ACCORDING TO THE ADMIN'S WORK LOCATION PIN
     onLocationUpdate({
       latitude: targetLoc.latitude,
       longitude: targetLoc.longitude,
@@ -209,20 +196,17 @@ export const LocationPicker: React.FC<LocationPickerProps> = ({
     });
   };
 
-  // Device GPS detection to verify proximity to the Admin work location pin
-  const fetchDeviceGPS = (targetLocId = activeWorkLocationId) => {
+  // Device GPS detection to verify proximity to the mandatory work location pin
+  const fetchDeviceGPS = () => {
     setIsLoading(true);
     setErrorMsg(null);
 
-    const targetLoc =
-      workLocations.find((w) => w.id === targetLocId) ||
-      workLocations.find((w) => w.isActive) ||
-      workLocations[0];
+    const targetLoc = resolveMandatoryLocation(workLocations);
 
-    if (!navigator.geolocation) {
-      setErrorMsg('อุปกรณ์นี้ไม่รองรับระบบ GPS');
+    if (typeof navigator === 'undefined' || !navigator.geolocation) {
+      setErrorMsg('อุปกรณ์นี้ไม่รองรับระบบ GPS (ใช้พิกัดหมุดจุดเช็คอินหลัก)');
       setIsLoading(false);
-      applyAdminWorkLocationPin(targetLocId, null);
+      applyMandatoryWorkLocationPin(null);
       return;
     }
 
@@ -233,89 +217,88 @@ export const LocationPicker: React.FC<LocationPickerProps> = ({
         accuracy: Math.round(pos.coords.accuracy),
       };
       setDeviceCoords(dev);
-      applyAdminWorkLocationPin(targetLocId, dev);
+      applyMandatoryWorkLocationPin(dev);
       setIsLoading(false);
 
       // Enrich with detailed street/subdistrict Thai address asynchronously
-      const addr = await reverseGeocodeThai(dev.latitude, dev.longitude, targetLoc?.address);
+      const addr = await reverseGeocodeThai(dev.latitude, dev.longitude, targetLoc.address);
       if (addr) {
-        applyAdminWorkLocationPin(targetLocId, dev, addr);
+        applyMandatoryWorkLocationPin(dev, addr);
       }
     };
 
     const handleFallback = () => {
-      // Use standard accuracy fallback
-      navigator.geolocation.getCurrentPosition(
-        handleSuccess,
-        (fallbackErr) => {
-          if (fallbackErr.code === fallbackErr.PERMISSION_DENIED) {
-            setErrorMsg('เบราว์เซอร์ไม่ได้รับอนุญาตให้เข้าถึง GPS (ระบบจะใช้พิกัดหมุดที่ Admin กำหนดโดยตรง)');
-          } else {
-            setErrorMsg('สัญญาณ GPS จากเครื่องอ่อน ระบบใช้พิกัดหมุดจุดปฏิบัติงานของ Admin');
-          }
-          applyAdminWorkLocationPin(targetLocId, null);
-          setIsLoading(false);
-        },
-        { enableHighAccuracy: false, timeout: 8000, maximumAge: 60000 }
-      );
+      try {
+        navigator.geolocation.getCurrentPosition(
+          handleSuccess,
+          (fallbackErr) => {
+            if (fallbackErr && fallbackErr.code === fallbackErr.PERMISSION_DENIED) {
+              setErrorMsg('เบราว์เซอร์ไม่ได้รับอนุญาตให้เข้าถึง GPS (ระบบใช้พิกัดหมุดจุดเช็คอินหลักโดยตรง)');
+            } else {
+              setErrorMsg('สัญญาณ GPS จากเครื่องอ่อน ระบบใช้พิกัดหมุดจุดเช็คอินหลัก');
+            }
+            applyMandatoryWorkLocationPin(null);
+            setIsLoading(false);
+          },
+          { enableHighAccuracy: false, timeout: 8000, maximumAge: 60000 }
+        );
+      } catch {
+        applyMandatoryWorkLocationPin(null);
+        setIsLoading(false);
+      }
     };
 
-    navigator.geolocation.getCurrentPosition(handleSuccess, handleFallback, {
-      enableHighAccuracy: true,
-      timeout: 6000,
-      maximumAge: 20000,
-    });
+    try {
+      navigator.geolocation.getCurrentPosition(handleSuccess, handleFallback, {
+        enableHighAccuracy: true,
+        timeout: 6000,
+        maximumAge: 20000,
+      });
+    } catch {
+      handleFallback();
+    }
   };
 
-  // On mount or when activeWorkLocationId changes, update pin
+  // Update pin whenever workLocations change
   useEffect(() => {
-    if (activeWorkLocationId && workLocations.length > 0) {
-      applyAdminWorkLocationPin(activeWorkLocationId, deviceCoords);
-    }
-  }, [activeWorkLocationId, workLocations]);
+    applyMandatoryWorkLocationPin(deviceCoords);
+  }, [workLocations]);
 
   // Initial GPS fetch on mount
   useEffect(() => {
-    fetchDeviceGPS(activeWorkLocationId);
+    fetchDeviceGPS();
   }, []);
 
-  // When user switches work location in the selector or clicks a location pill
-  const handleSelectWorkLocation = (newLocId: string) => {
-    setActiveWorkLocationId(newLocId);
-    applyAdminWorkLocationPin(newLocId, deviceCoords);
-  };
-
-  // Selected work location object
-  const selectedLocationObj = workLocations.find((w) => w.id === activeWorkLocationId) || workLocations[0];
+  const selectedLocationObj = mandatoryLoc;
 
   return (
     <div className="bg-white rounded-2xl p-4 border border-slate-200 shadow-xs space-y-3.5">
       {/* Header with Title & Refresh button */}
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <div className="p-2 bg-indigo-50 text-indigo-600 rounded-xl">
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex items-center gap-2 min-w-0">
+          <div className="p-2 bg-indigo-50 text-indigo-600 rounded-xl shrink-0">
             <MapPin className="w-4 h-4" />
           </div>
-          <div>
+          <div className="min-w-0">
             <span className="text-xs sm:text-sm font-bold text-slate-800 block leading-tight">
-              พิกัดจุดปฏิบัติงาน (Admin Defined Location)
+              จุดเช็คอินหลัก (พนักงานทุกคนเช็คอินที่นี่เท่านั้น)
             </span>
-            <div className="flex items-center gap-1.5 text-[10px] text-slate-500 mt-0.5">
-              <ShieldCheck className="w-3 h-3 text-emerald-600" />
-              <span>ปักหมุดตามตำแหน่งที่ผู้ดูแลระบบกำหนดเท่านั้น</span>
+            <div className="flex items-center gap-1.5 text-[10px] text-emerald-700 mt-0.5 font-medium">
+              <ShieldCheck className="w-3 h-3 text-emerald-600 shrink-0" />
+              <span className="truncate">ล็อกหมุดจุดปฏิบัติงานเดียวของมูลนิธิฯ ({selectedLocationObj.code})</span>
             </div>
           </div>
         </div>
 
         <button
           type="button"
-          onClick={() => fetchDeviceGPS(activeWorkLocationId)}
+          onClick={() => fetchDeviceGPS()}
           disabled={isLoading}
-          className="text-xs text-indigo-600 hover:text-indigo-700 flex items-center gap-1 font-semibold bg-indigo-50 hover:bg-indigo-100 px-2.5 py-1.5 rounded-xl transition active:scale-95 disabled:opacity-50 cursor-pointer"
-          title="อัปเดตและตรวจวัดระยะห่างกับหมุด Admin"
+          className="text-xs text-indigo-600 hover:text-indigo-700 flex items-center gap-1 font-semibold bg-indigo-50 hover:bg-indigo-100 px-2.5 py-1.5 rounded-xl transition active:scale-95 disabled:opacity-50 cursor-pointer shrink-0"
+          title="อัปเดตและตรวจวัดระยะห่างกับหมุดจุดเช็คอิน"
         >
           <RefreshCw className={`w-3.5 h-3.5 ${isLoading ? 'animate-spin' : ''}`} />
-          {isLoading ? 'กำลังตรวจวัด...' : 'เช็คระยะ GPS'}
+          <span>{isLoading ? 'กำลังตรวจวัด...' : 'เช็คระยะ GPS'}</span>
         </button>
       </div>
 
@@ -326,57 +309,30 @@ export const LocationPicker: React.FC<LocationPickerProps> = ({
         </div>
       )}
 
-      {/* Admin Work Locations Selector & Quick Chips */}
-      {workLocations.length > 0 && (
-        <div className="bg-slate-50 p-3 rounded-2xl border border-slate-200 space-y-2">
-          <div className="flex items-center justify-between text-xs font-bold text-slate-700">
-            <span className="flex items-center gap-1.5">
-              <Building2 className="w-3.5 h-3.5 text-indigo-600" />
-              <span>เลือกหมุดจุดปฏิบัติงานของ Admin:</span>
-            </span>
-            <span className="text-[10px] bg-indigo-100 text-indigo-700 font-semibold px-2 py-0.5 rounded-full">
-              {workLocations.length} จุดพิกัด
-            </span>
-          </div>
-
-          {/* Main Dropdown */}
-          <select
-            value={activeWorkLocationId}
-            onChange={(e) => handleSelectWorkLocation(e.target.value)}
-            className="w-full text-xs p-2.5 bg-white rounded-xl border border-slate-200 font-medium text-slate-800 focus:ring-2 focus:ring-indigo-500 focus:outline-none cursor-pointer"
-          >
-            {workLocations.map((loc) => (
-              <option key={loc.id} value={loc.id}>
-                📍 {loc.name} ({loc.code})
-              </option>
-            ))}
-          </select>
-
-          {/* Quick Select Location Pills */}
-          <div className="flex flex-wrap gap-1.5 pt-1">
-            {workLocations.map((loc) => {
-              const isSelected = loc.id === activeWorkLocationId;
-              return (
-                <button
-                  key={loc.id}
-                  type="button"
-                  onClick={() => handleSelectWorkLocation(loc.id)}
-                  className={`text-[11px] px-2.5 py-1 rounded-lg border font-medium transition cursor-pointer flex items-center gap-1 ${
-                    isSelected
-                      ? 'bg-indigo-600 text-white border-indigo-600 shadow-2xs font-semibold'
-                      : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-100'
-                  }`}
-                >
-                  <MapPin className={`w-3 h-3 ${isSelected ? 'text-white' : 'text-slate-400'}`} />
-                  <span className="truncate max-w-[180px]">{loc.name}</span>
-                </button>
-              );
-            })}
-          </div>
+      {/* Exclusive Locked Work Location Banner */}
+      <div className="bg-indigo-50/70 p-3 rounded-2xl border border-indigo-200/80 space-y-1.5">
+        <div className="flex items-center justify-between gap-2 flex-wrap">
+          <span className="text-xs font-bold text-indigo-950 flex items-center gap-1.5">
+            <Building2 className="w-3.5 h-3.5 text-indigo-600 shrink-0" />
+            <span>{selectedLocationObj.name}</span>
+          </span>
+          <span className="text-[10px] bg-indigo-600 text-white font-mono font-bold px-2 py-0.5 rounded-full shrink-0">
+            {selectedLocationObj.code}
+          </span>
         </div>
-      )}
+        <p className="text-[11px] text-slate-600 leading-relaxed">
+          {selectedLocationObj.address}
+        </p>
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] text-slate-600 pt-0.5">
+          <span className="font-mono text-indigo-800 font-semibold">
+            GPS: {selectedLocationObj.latitude.toFixed(7)}, {selectedLocationObj.longitude.toFixed(6)}
+          </span>
+          <span>• แผนกที่รับผิดชอบ: <strong>ทุกแผนก (ใช้ร่วมกัน)</strong></span>
+          <span className="text-emerald-700 font-semibold">• รัศมี {selectedLocationObj.radiusMeters} ม.</span>
+        </div>
+      </div>
 
-      {/* Embedded Live Map Preview Anchored to the Admin Work Location Pin */}
+      {/* Embedded Live Map Preview Anchored to LOC-BUALUANG-HQ */}
       {selectedLocationObj && (
         <div className="rounded-2xl overflow-hidden border border-slate-200 shadow-2xs relative bg-slate-100">
           <div className="relative w-full h-44 sm:h-52">

@@ -92,100 +92,209 @@ export const CameraCapture: React.FC<CameraCaptureProps> = ({
 }) => {
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+  const isMountedRef = useRef(true);
 
-  const [stream, setStream] = useState<MediaStream | null>(null);
   const [cameraError, setCameraError] = useState<string | null>(null);
   const [facingMode, setFacingMode] = useState<'user' | 'environment'>('user');
   const [isInitializing, setIsInitializing] = useState(false);
   const [flashEffect, setFlashEffect] = useState(false);
   const [isLiveReady, setIsLiveReady] = useState(false);
 
-  // Stop camera stream safely
+  // Stop camera stream safely using ref (prevents Android NotReadableError on camera switch/retake)
   const stopStream = useCallback(() => {
-    if (stream) {
-      stream.getTracks().forEach((track) => {
+    const activeStream = streamRef.current;
+    if (activeStream) {
+      activeStream.getTracks().forEach((track) => {
         try {
           track.stop();
         } catch {
           // ignore
         }
       });
-      setStream(null);
+      streamRef.current = null;
     }
-  }, [stream]);
+    if (videoRef.current) {
+      try {
+        videoRef.current.srcObject = null;
+      } catch {
+        // ignore
+      }
+    }
+  }, []);
 
-  // Start Live Camera stream (Wide-angle 16:9 HD / Full HD for crisp zoomable captures)
+  // Polyfill-safe getUserMedia helper across iOS Safari (all versions), Android Chrome, Samsung Internet, and In-App Browsers
+  const requestCameraStreamWithFallbacks = async (
+    preferredFacing: 'user' | 'environment'
+  ): Promise<MediaStream> => {
+    const navAny = navigator as any;
+    const getUserMediaFn =
+      navigator?.mediaDevices?.getUserMedia?.bind(navigator.mediaDevices) ||
+      (navAny?.getUserMedia
+        ? (c: MediaStreamConstraints) =>
+            new Promise<MediaStream>((resolve, reject) => navAny.getUserMedia(c, resolve, reject))
+        : null) ||
+      (navAny?.webkitGetUserMedia
+        ? (c: MediaStreamConstraints) =>
+            new Promise<MediaStream>((resolve, reject) => navAny.webkitGetUserMedia(c, resolve, reject))
+        : null) ||
+      (navAny?.mozGetUserMedia
+        ? (c: MediaStreamConstraints) =>
+            new Promise<MediaStream>((resolve, reject) => navAny.mozGetUserMedia(c, resolve, reject))
+        : null);
+
+    if (!getUserMediaFn) {
+      throw Object.assign(new Error('No getUserMedia support'), { name: 'UnsupportedBrowserError' });
+    }
+
+    // Progressive vertical portrait constraints (prevents OverconstrainedError on older iOS/Android sensors)
+    const attempts: MediaStreamConstraints[] = [
+      {
+        video: {
+          facingMode: { ideal: preferredFacing },
+          width: { ideal: 1080 },
+          height: { ideal: 1440 },
+          aspectRatio: { ideal: 3 / 4 },
+        },
+        audio: false,
+      },
+      {
+        video: {
+          facingMode: { ideal: preferredFacing },
+          width: { ideal: 720 },
+          height: { ideal: 960 },
+        },
+        audio: false,
+      },
+      {
+        video: {
+          facingMode: preferredFacing,
+        },
+        audio: false,
+      },
+      {
+        video: true,
+        audio: false,
+      },
+    ];
+
+    let lastError: any = null;
+    for (const constraints of attempts) {
+      try {
+        return await getUserMediaFn(constraints);
+      } catch (err: any) {
+        lastError = err;
+        // Stop retrying only on explicit permission refusal
+        if (err?.name === 'NotAllowedError' || err?.name === 'PermissionDeniedError') {
+          throw err;
+        }
+      }
+    }
+    throw lastError || new Error('Cannot acquire camera stream');
+  };
+
+  // Start Live Portrait Camera stream
   const startCamera = useCallback(async () => {
     setIsInitializing(true);
     setCameraError(null);
     setIsLiveReady(false);
+    stopStream();
 
-    if (stream) {
-      stream.getTracks().forEach((track) => track.stop());
-    }
-
-    if (!navigator?.mediaDevices?.getUserMedia) {
-      setCameraError('อุปกรณ์หรือเบราว์เซอร์นี้ไม่รองรับการเปิดกล้องเว็บแคมโดยตรง กรุณาใช้งานผ่าน Safari (iOS) หรือ Chrome (Android/PC)');
+    if (typeof window !== 'undefined' && !window.isSecureContext && window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1') {
+      setCameraError('เบราว์เซอร์บนมือถือต้องเปิดผ่าน HTTPS จึงจะอนุญาตให้ใช้กล้องได้ กรุณาเปิดผ่านลิงก์ HTTPS ของระบบ');
       setIsInitializing(false);
       return;
     }
 
     try {
-      const constraints: MediaStreamConstraints = {
-        video: {
-          facingMode: { ideal: facingMode },
-          width: { ideal: 1920, min: 1280 },
-          height: { ideal: 1080, min: 720 },
-          aspectRatio: { ideal: 16 / 9 },
-        },
-        audio: false,
-      };
+      const mediaStream = await requestCameraStreamWithFallbacks(facingMode);
 
-      const mediaStream = await navigator.mediaDevices.getUserMedia(constraints);
-      setStream(mediaStream);
+      if (!isMountedRef.current) {
+        mediaStream.getTracks().forEach((t) => {
+          try { t.stop(); } catch {}
+        });
+        return;
+      }
 
-      if (videoRef.current) {
-        videoRef.current.srcObject = mediaStream;
-        videoRef.current.onloadedmetadata = () => {
-          setIsLiveReady(true);
-          videoRef.current?.play().catch((err) => {
-            console.warn('Video auto-play warning:', err);
-          });
+      streamRef.current = mediaStream;
+
+      const video = videoRef.current;
+      if (video) {
+        video.setAttribute('playsinline', 'true');
+        video.setAttribute('webkit-playsinline', 'true');
+        video.setAttribute('x5-playsinline', 'true');
+        video.muted = true;
+        video.srcObject = mediaStream;
+
+        const markReadyAndPlay = () => {
+          if (!isMountedRef.current) return;
+          if (video.videoWidth > 0 && video.videoHeight > 0) {
+            setIsLiveReady(true);
+          }
+          const playPromise = video.play?.();
+          if (playPromise && typeof playPromise.catch === 'function') {
+            playPromise.catch((err) => {
+              console.warn('Video auto-play notice:', err);
+            });
+          }
         };
+
+        video.onloadedmetadata = markReadyAndPlay;
+        video.oncanplay = markReadyAndPlay;
+        video.onplaying = () => {
+          if (isMountedRef.current) setIsLiveReady(true);
+        };
+
+        // Older Android WebViews sometimes skip loadedmetadata if stream starts hot
+        setTimeout(() => {
+          if (isMountedRef.current && video.videoWidth > 0) {
+            setIsLiveReady(true);
+          }
+        }, 450);
       }
     } catch (err: any) {
       console.warn('Live camera access error:', err);
       let errorMsg = 'ไม่สามารถเปิดกล้องสดได้ กรุณาอนุญาตการเข้าถึงกล้องในการตั้งค่าเบราว์เซอร์';
-      if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
-        errorMsg = 'การเข้าถึงกล้องถูกปฏิเสธ กรุณากดอนุญาตให้ใช้งานกล้องถ่ายรูปในการตั้งค่าเบราว์เซอร์';
-      } else if (err.name === 'NotFoundError' || err.name === 'DevicesNotFoundError') {
-        errorMsg = 'ไม่พบอุปกรณ์กล้องถ่ายภาพบนอุปกรณ์นี้';
+      if (err?.name === 'UnsupportedBrowserError') {
+        errorMsg = 'เบราว์เซอร์ในแอปนี้จำกัดการเปิดกล้อง กรุณากดเปิดลิงก์ใน Safari (iOS) หรือ Google Chrome (Android)';
+      } else if (err?.name === 'NotAllowedError' || err?.name === 'PermissionDeniedError') {
+        errorMsg = 'การเข้าถึงกล้องถูกปฏิเสธ กรุณากด "อนุญาต (Allow)" กล้องในการตั้งค่าเบราว์เซอร์หรือโทรศัพท์';
+      } else if (err?.name === 'NotFoundError' || err?.name === 'DevicesNotFoundError') {
+        errorMsg = 'ไม่พบอุปกรณ์กล้องถ่ายภาพบนเครื่องนี้';
+      } else if (err?.name === 'NotReadableError' || err?.name === 'TrackStartError') {
+        errorMsg = 'กล้องกำลังถูกใช้งานโดยแอปอื่น กรุณาปิดแอปอื่นแล้วกด "ลองเปิดกล้องอีกครั้ง"';
       }
-      setCameraError(`${errorMsg} (ระบบไม่อนุญาตให้อัปโหลดภาพจากแกลเลอรีทุกกรณีเพื่อความโปร่งใส)`);
+      setCameraError(`${errorMsg} (ระบบไม่อนุญาตให้อัปโหลดภาพจากแกลเลอรีเพื่อความโปร่งใส)`);
     } finally {
-      setIsInitializing(false);
+      if (isMountedRef.current) {
+        setIsInitializing(false);
+      }
     }
-  }, [facingMode, stream]);
+  }, [facingMode, stopStream]);
 
-  // Initial mount or mode change
+  useEffect(() => {
+    isMountedRef.current = true;
+    return () => {
+      isMountedRef.current = false;
+      stopStream();
+    };
+  }, [stopStream]);
+
+  // Initial mount or facing/retake change
   useEffect(() => {
     if (!photo) {
       startCamera();
     } else {
       stopStream();
     }
-
-    return () => {
-      stopStream();
-    };
-  }, [facingMode, photo]);
+  }, [facingMode, photo, startCamera, stopStream]);
 
   // Switch between front and back camera
   const toggleFacingMode = () => {
     setFacingMode((prev) => (prev === 'user' ? 'environment' : 'user'));
   };
 
-  // Capture high-resolution wide-angle Snapshot from Live Video & burn Smart Time bottom-left watermark
+  // Capture crisp 3:4 vertical portrait Snapshot & burn Smart Time bottom-left watermark
   const handleCapture = () => {
     if (!videoRef.current || !canvasRef.current) return;
     const video = videoRef.current;
@@ -199,14 +308,31 @@ export const CameraCapture: React.FC<CameraCaptureProps> = ({
     setTimeout(() => setFlashEffect(false), 200);
 
     const canvas = canvasRef.current;
-    const rawW = video.videoWidth || 1280;
-    const rawH = video.videoHeight || 720;
+    const rawW = video.videoWidth || 720;
+    const rawH = video.videoHeight || 960;
 
-    // Keep wide resolution crisp (up to 1600px wide, proportional height)
-    const maxTargetWidth = 1600;
-    const scale = rawW > maxTargetWidth ? maxTargetWidth / rawW : 1;
-    canvas.width = Math.round(rawW * scale);
-    canvas.height = Math.round(rawH * scale);
+    // Crop video center cleanly to vertical 3:4 portrait aspect ratio matching the live viewfinder
+    const targetAspect = 3 / 4;
+    const sourceAspect = rawW / rawH;
+    let sx = 0;
+    let sy = 0;
+    let sw = rawW;
+    let sh = rawH;
+
+    if (sourceAspect > targetAspect) {
+      // Sensor is wider than 3:4 (e.g. 16:9 or 4:3 landscape sensor) -> crop horizontally to centered 3:4
+      sw = Math.round(rawH * targetAspect);
+      sx = Math.round((rawW - sw) / 2);
+    } else if (sourceAspect < targetAspect) {
+      // Sensor is taller than 3:4 (e.g. 9:16 sensor) -> crop vertically to centered 3:4
+      sh = Math.round(rawW / targetAspect);
+      sy = Math.round((rawH - sh) / 2);
+    }
+
+    const targetWidth = Math.min(900, Math.max(600, sw));
+    const targetHeight = Math.round(targetWidth / targetAspect);
+    canvas.width = targetWidth;
+    canvas.height = targetHeight;
 
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
@@ -220,7 +346,7 @@ export const CameraCapture: React.FC<CameraCaptureProps> = ({
       ctx.scale(-1, 1);
     }
 
-    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    ctx.drawImage(video, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height);
 
     // Reset transform so watermark text is readable (not mirrored)
     ctx.setTransform(1, 0, 0, 1, 0, 0);
@@ -231,18 +357,18 @@ export const CameraCapture: React.FC<CameraCaptureProps> = ({
       watermarkInfo?.latitude !== undefined ? watermarkInfo.latitude.toFixed(6) : '13.578107';
     const lonText =
       watermarkInfo?.longitude !== undefined ? watermarkInfo.longitude.toFixed(6) : '100.594069';
-    const pinName = watermarkInfo?.workLocationName || 'จุดปฏิบัติงาน Smart Time';
+    const pinName = watermarkInfo?.workLocationName || 'มูลนิธิร่วมกุศล สมุทรปราการ (ศูนย์วิทยุบัวหลวง กู้ชีพกู้ภัย)';
     const rawAddress = watermarkInfo?.addressLine || pinName;
     const cleanAddress = rawAddress.includes('•')
       ? rawAddress.split('•').slice(1).join('•').trim()
       : rawAddress;
 
-    // Scale typography cleanly relative to canvas width
-    const uiScale = Math.max(0.85, canvas.width / 1280);
-    const padX = Math.round(18 * uiScale);
-    const padY = Math.round(14 * uiScale);
+    // Scale typography cleanly relative to portrait canvas width (~900px)
+    const uiScale = Math.max(0.75, canvas.width / 900);
+    const padX = Math.round(16 * uiScale);
+    const padY = Math.round(12 * uiScale);
     const margin = Math.round(16 * uiScale);
-    const maxBoxW = Math.min(Math.round(canvas.width * 0.72), Math.round(760 * uiScale));
+    const maxBoxW = Math.round(canvas.width - margin * 2);
     const contentW = maxBoxW - padX * 2;
 
     const brandFontSize = Math.round(20 * uiScale);
@@ -258,7 +384,7 @@ export const CameraCapture: React.FC<CameraCaptureProps> = ({
     const coordLines = wrapTextLines(ctx, `พิกัดที่ถ่ายรูป: ${pinName}`, contentW, 2);
 
     // Total lines height calculation
-    const headerH = Math.round(28 * uiScale);
+    const headerH = Math.round(26 * uiScale);
     const timeAndLatLonRows = 2; // Row 1: Time, Row 2: Lat/Lon
     const boxH =
       padY * 2 +
@@ -272,13 +398,13 @@ export const CameraCapture: React.FC<CameraCaptureProps> = ({
     const boxY = Math.max(margin, canvas.height - margin - boxH);
 
     // Subtle dark gradient backdrop at bottom-left + rounded glass card
-    const grad = ctx.createLinearGradient(0, boxY - 30, 0, canvas.height);
+    const grad = ctx.createLinearGradient(0, boxY - 36, 0, canvas.height);
     grad.addColorStop(0, 'rgba(2, 6, 23, 0)');
-    grad.addColorStop(1, 'rgba(2, 6, 23, 0.55)');
+    grad.addColorStop(1, 'rgba(2, 6, 23, 0.58)');
     ctx.fillStyle = grad;
-    ctx.fillRect(0, boxY - 30, canvas.width, canvas.height - (boxY - 30));
+    ctx.fillRect(0, boxY - 36, canvas.width, canvas.height - (boxY - 36));
 
-    ctx.fillStyle = 'rgba(15, 23, 42, 0.82)';
+    ctx.fillStyle = 'rgba(15, 23, 42, 0.84)';
     drawRoundedRect(ctx, boxX, boxY, maxBoxW, boxH, Math.round(12 * uiScale));
     ctx.fill();
 
@@ -357,7 +483,7 @@ export const CameraCapture: React.FC<CameraCaptureProps> = ({
     watermarkInfo?.latitude !== undefined ? watermarkInfo.latitude.toFixed(6) : '13.578107';
   const previewLon =
     watermarkInfo?.longitude !== undefined ? watermarkInfo.longitude.toFixed(6) : '100.594069';
-  const previewPin = watermarkInfo?.workLocationName || 'จุดปฏิบัติงาน Smart Time';
+  const previewPin = watermarkInfo?.workLocationName || 'มูลนิธิร่วมกุศล สมุทรปราการ (ศูนย์วิทยุบัวหลวง กู้ชีพกู้ภัย)';
   const previewAddr = watermarkInfo?.addressLine || previewPin;
 
   return (
@@ -365,27 +491,27 @@ export const CameraCapture: React.FC<CameraCaptureProps> = ({
       <canvas ref={canvasRef} className="hidden" />
 
       {/* Security Rule Badge */}
-      <div className="mb-2 px-3 py-1.5 bg-amber-50 border border-amber-200/80 rounded-xl flex items-center justify-between text-[11px] text-amber-900">
+      <div className="mb-2.5 px-3 py-1.5 bg-amber-50 border border-amber-200/80 rounded-xl flex items-center justify-between text-[11px] text-amber-900">
         <div className="flex items-center gap-1.5 font-medium">
           <ShieldCheck className="w-3.5 h-3.5 text-amber-600 shrink-0" />
-          <span>ระบบถ่ายภาพสดมุมกว้าง HD (LIVE CAMERA ONLY)</span>
+          <span>กล้องถ่ายภาพใบหน้าแนวตั้ง (LIVE CAMERA ONLY)</span>
         </div>
-        <span className="text-[10px] bg-amber-200/70 text-amber-900 px-2 py-0.5 rounded-full font-semibold">
-          ประทับลายน้ำ GPS
+        <span className="text-[10px] bg-amber-200/70 text-amber-900 px-2 py-0.5 rounded-full font-semibold shrink-0">
+          iOS & Android
         </span>
       </div>
 
       {photo ? (
-        // Preview Captured Crisp Wide-Angle Photo (bottom-left watermark unobstructed)
-        <div className="relative rounded-2xl overflow-hidden border-2 border-emerald-500 bg-slate-900 shadow-md aspect-video">
+        // Preview Captured Crisp Portrait Photo (bottom-left watermark unobstructed)
+        <div className="relative rounded-2xl overflow-hidden border-2 border-emerald-500 bg-slate-900 shadow-md aspect-[3/4] w-full max-w-[360px] sm:max-w-[390px] mx-auto">
           <img
             src={photo}
-            alt="รูปถ่ายยืนยันตัวตนสด"
+            alt="รูปถ่ายยืนยันตัวตนสดแนวตั้ง"
             className="w-full h-full object-cover"
           />
 
           <div className="absolute top-3 left-3 bg-emerald-600/95 backdrop-blur-xs text-white text-xs px-3 py-1 rounded-full flex items-center gap-1.5 font-medium shadow-xs">
-            <CheckCircle2 className="w-3.5 h-3.5 text-white" /> ถ่ายจากกล้องสด & ประทับพิกัดแล้ว
+            <CheckCircle2 className="w-3.5 h-3.5 text-white" /> ถ่ายภาพแนวตั้ง & ประทับพิกัดแล้ว
           </div>
 
           <button
@@ -397,12 +523,12 @@ export const CameraCapture: React.FC<CameraCaptureProps> = ({
           </button>
         </div>
       ) : (
-        // Live Wide-Angle Camera Viewfinder
-        <div className="relative rounded-2xl overflow-hidden bg-slate-950 border border-slate-800 shadow-inner aspect-video min-h-[240px] sm:min-h-[280px] flex flex-col items-center justify-center">
+        // Live Vertical Portrait Camera Viewfinder (3:4 mobile selfie orientation)
+        <div className="relative rounded-2xl overflow-hidden bg-slate-950 border border-slate-800 shadow-inner aspect-[3/4] w-full max-w-[360px] sm:max-w-[390px] mx-auto min-h-[420px] flex flex-col items-center justify-center">
           {/* Flash animation */}
           {flashEffect && <div className="absolute inset-0 bg-white z-30 animate-out fade-out duration-200" />}
 
-          {/* Video Stream Element with Full iOS Safari & Android Attributes */}
+          {/* Video Stream Element with Full iOS Safari & Android WebView Attributes */}
           <video
             ref={videoRef}
             autoPlay
@@ -410,6 +536,7 @@ export const CameraCapture: React.FC<CameraCaptureProps> = ({
             muted
             // @ts-ignore
             webkit-playsinline="true"
+            x5-playsinline="true"
             className={`w-full h-full object-cover transition-transform duration-300 ${
               facingMode === 'user' ? 'scale-x-[-1]' : ''
             }`}
@@ -422,15 +549,15 @@ export const CameraCapture: React.FC<CameraCaptureProps> = ({
                 <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75"></span>
                 <span className="relative inline-flex rounded-full h-2 w-2 bg-red-500"></span>
               </span>
-              <span className="font-semibold tracking-wide">LIVE มุมกว้าง</span>
+              <span className="font-semibold tracking-wide">LIVE แนวตั้ง</span>
             </div>
           </div>
 
-          {/* Oval Face Guide */}
-          <div className="absolute inset-0 pointer-events-none flex items-center justify-center">
-            <div className="w-36 h-44 sm:w-44 sm:h-52 rounded-full border-2 border-dashed border-emerald-400/70 shadow-[0_0_0_9999px_rgba(0,0,0,0.32)] flex items-center justify-center">
-              <span className="text-[10px] sm:text-[11px] text-white/90 font-medium tracking-wide bg-black/55 px-2.5 py-0.5 rounded-full backdrop-blur-xs border border-white/15">
-                จัดใบหน้าให้อยู่ในกรอบ
+          {/* Vertical Oval Face Guide (shifted up slightly so bottom watermark stays clear) */}
+          <div className="absolute inset-0 pb-20 pointer-events-none flex items-center justify-center">
+            <div className="w-44 h-56 sm:w-48 sm:h-64 rounded-full border-2 border-dashed border-emerald-400/75 shadow-[0_0_0_9999px_rgba(0,0,0,0.34)] flex items-end justify-center pb-3">
+              <span className="text-[10px] sm:text-[11px] text-white/95 font-medium tracking-wide bg-black/60 px-2.5 py-0.5 rounded-full backdrop-blur-xs border border-white/15">
+                จัดใบหน้าให้อยู่ในกรอบแนวตั้ง
               </span>
             </div>
           </div>
@@ -470,7 +597,7 @@ export const CameraCapture: React.FC<CameraCaptureProps> = ({
 
           {/* Bottom Bar: Left Live Watermark Preview + Right Shutter Button (non-overlapping) */}
           <div className="absolute bottom-2.5 inset-x-2.5 z-20 flex items-end justify-between gap-2 pointer-events-none">
-            <div className="bg-slate-950/80 backdrop-blur-md border border-emerald-400/40 border-l-4 border-l-emerald-400 rounded-xl px-2.5 py-1.5 text-white max-w-[68%] sm:max-w-[72%] space-y-0.5 shadow-lg">
+            <div className="bg-slate-950/82 backdrop-blur-md border border-emerald-400/40 border-l-4 border-l-emerald-400 rounded-xl px-2.5 py-1.5 text-white max-w-[70%] space-y-0.5 shadow-lg">
               <div className="flex items-center gap-1.5 text-[11px] font-bold text-emerald-300 leading-tight">
                 <span>Smart Time</span>
                 <span className="text-[9px] text-slate-300 font-normal">• {thaiLive.timeStr} น.</span>
@@ -493,7 +620,7 @@ export const CameraCapture: React.FC<CameraCaptureProps> = ({
                 onClick={handleCapture}
                 disabled={isInitializing || !!cameraError || !isLiveReady}
                 className="w-14 h-14 sm:w-16 sm:h-16 rounded-full bg-white hover:bg-slate-100 p-1 flex items-center justify-center shadow-xl active:scale-90 transition disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
-                title="กดเพื่อถ่ายรูปจากกล้องสด"
+                title="กดเพื่อถ่ายรูปใบหน้าแนวตั้ง"
               >
                 <div className="w-full h-full rounded-full border-4 border-slate-900 flex items-center justify-center bg-white hover:bg-slate-50 transition">
                   <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-full bg-emerald-500 flex items-center justify-center shadow-inner">

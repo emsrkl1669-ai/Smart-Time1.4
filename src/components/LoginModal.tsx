@@ -118,7 +118,11 @@ export const LoginModal: React.FC<LoginModalProps> = ({ onLoginSuccess }) => {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!username.trim() || !password) {
+    const cleanedUsername = username
+      .replace(/[\u200B-\u200D\uFEFF]/g, '')
+      .trim()
+      .replace(/^@+/, '');
+    if (!cleanedUsername || !password) {
       setErrorMsg('กรุณากรอก Username และ Password');
       return;
     }
@@ -127,7 +131,7 @@ export const LoginModal: React.FC<LoginModalProps> = ({ onLoginSuccess }) => {
     setErrorMsg(null);
 
     try {
-      const res = await api.login(username.trim(), password, rememberDevice);
+      const res = await api.login(cleanedUsername, password, rememberDevice);
       onLoginSuccess(res.user);
     } catch (err: any) {
       setErrorMsg(err.message || 'ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง');
@@ -168,11 +172,37 @@ export const LoginModal: React.FC<LoginModalProps> = ({ onLoginSuccess }) => {
     }
   };
 
-  const copyAppUrl = () => {
+  const copyAppUrl = async () => {
     const appUrl = getPublicAppUrl();
-    navigator.clipboard.writeText(appUrl);
-    setCopiedLink(true);
-    setTimeout(() => setCopiedLink(false), 2500);
+    let copied = false;
+    try {
+      if (typeof navigator !== 'undefined' && navigator.clipboard && navigator.clipboard.writeText) {
+        await navigator.clipboard.writeText(appUrl);
+        copied = true;
+      }
+    } catch {
+      copied = false;
+    }
+    if (!copied && typeof document !== 'undefined') {
+      try {
+        const ta = document.createElement('textarea');
+        ta.value = appUrl;
+        ta.setAttribute('readonly', '');
+        ta.style.position = 'fixed';
+        ta.style.left = '-9999px';
+        document.body.appendChild(ta);
+        ta.select();
+        ta.setSelectionRange(0, appUrl.length);
+        copied = document.execCommand('copy');
+        document.body.removeChild(ta);
+      } catch {
+        copied = false;
+      }
+    }
+    if (copied) {
+      setCopiedLink(true);
+      setTimeout(() => setCopiedLink(false), 2500);
+    }
   };
 
   const filteredUsers = allUsers.filter((u) => {
@@ -308,6 +338,7 @@ export const LoginModal: React.FC<LoginModalProps> = ({ onLoginSuccess }) => {
                 autoCorrect="off"
                 spellCheck={false}
                 autoComplete="username"
+                enterKeyHint="next"
                 value={username}
                 onChange={(e) => {
                   setUsername(e.target.value);
@@ -401,6 +432,7 @@ export const LoginModal: React.FC<LoginModalProps> = ({ onLoginSuccess }) => {
                 autoCorrect="off"
                 spellCheck={false}
                 autoComplete="current-password"
+                enterKeyHint="done"
                 value={password}
                 onChange={(e) => {
                   const val = e.target.value;
