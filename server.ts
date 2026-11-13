@@ -967,7 +967,10 @@ async function startServer() {
 
   // 0. Cloud Firestore Master Synchronizer (smart-time-ca6f9)
   try {
-    const cloudData = await loadFromFirestore();
+    const cloudData = await Promise.race([
+      loadFromFirestore(),
+      new Promise<null>((resolve) => setTimeout(() => resolve(null), 10000)),
+    ]);
     if (cloudData && cloudData.users && cloudData.users.length > 0) {
       console.log(`☁️ Cloud Firestore connected: Loaded ${cloudData.users.length} users and ${cloudData.attendance?.length || 0} attendance records.`);
       db.users = cloudData.users;
@@ -1097,22 +1100,73 @@ async function startServer() {
     }
   });
 
-  // 2. Authentication: Login with username & password
-  app.post('/api/auth/login', (req: Request, res: Response) => {
-    const { username, password } = req.body;
-    if (!username || !password) {
+  // 2. Authentication: Login with username / employeeCode / fullName & password
+  app.post('/api/auth/login', async (req: Request, res: Response) => {
+    const { username, password } = req.body || {};
+    if (!username || password === undefined || password === null || String(password) === '') {
       res.status(400).json({ error: 'กรุณากรอก Username และ Password' });
       return;
     }
 
-    const cleanUsername = String(username).trim().toLowerCase();
+    const rawIdentifier = String(username).trim().replace(/^@+/, '');
+    const lowerIdentifier = rawIdentifier.toLowerCase();
+    const compactIdentifier = rawIdentifier.replace(/\s+/g, '').toLowerCase();
     const cleanPassword = String(password).trim();
 
-    const user = db.users.find(
-      (u) => u.username.toLowerCase() === cleanUsername && u.password === cleanPassword
-    );
+    const findMatchingUser = (userList: User[]) => {
+      return userList.find((u) => {
+        const uName = String(u.username || '').trim().toLowerCase();
+        const empCode = String(u.employeeCode || '').trim().toLowerCase();
+        const fullCompact = String(u.fullName || '').replace(/\s+/g, '').toLowerCase();
+        return (
+          uName === lowerIdentifier ||
+          (empCode !== '' && empCode === lowerIdentifier) ||
+          (compactIdentifier !== '' && fullCompact === compactIdentifier)
+        );
+      });
+    };
 
-    if (!user) {
+    const verifyUserPassword = (u: User) => {
+      const storedPass =
+        u.password !== undefined && u.password !== null && String(u.password).trim() !== ''
+          ? String(u.password).trim()
+          : u.username === 'admin'
+          ? 'admin123'
+          : '123456';
+      return storedPass === cleanPassword;
+    };
+
+    let user = findMatchingUser(db.users);
+
+    // If user not found or password mismatched in local memory, refresh from Cloud Firestore on demand
+    if ((!user || !verifyUserPassword(user)) && firestoreDb) {
+      try {
+        const cloudSnap = await Promise.race([
+          getDocs(collection(firestoreDb, 'users')),
+          new Promise<null>((resolve) => setTimeout(() => resolve(null), 5000)),
+        ]);
+        if (cloudSnap && !cloudSnap.empty) {
+          const cloudUsers: User[] = [];
+          cloudSnap.forEach((d) => cloudUsers.push(d.data() as User));
+          const cloudMatch = findMatchingUser(cloudUsers);
+          if (cloudMatch) {
+            // Update local cache with latest cloud user record
+            const localIdx = db.users.findIndex((u) => u.id === cloudMatch.id);
+            if (localIdx !== -1) {
+              db.users[localIdx] = cloudMatch;
+            } else {
+              db.users.push(cloudMatch);
+            }
+            saveDatabase(db);
+            user = cloudMatch;
+          }
+        }
+      } catch (cloudLookupErr) {
+        console.warn('On-demand Firestore login lookup notice:', cloudLookupErr);
+      }
+    }
+
+    if (!user || !verifyUserPassword(user)) {
       res.status(401).json({ error: 'ชื่อผู้ใช้งานหรือรหัสผ่านไม่ถูกต้อง' });
       return;
     }
@@ -1133,14 +1187,28 @@ async function startServer() {
   });
 
   // 2.1 Re-hydrate & Verify Session (Cross-device and post-restart persistence)
-  app.post('/api/auth/verify', (req: Request, res: Response) => {
-    const { userId } = req.body;
+  app.post('/api/auth/verify', async (req: Request, res: Response) => {
+    const { userId } = req.body || {};
     if (!userId) {
       res.status(400).json({ valid: false, error: 'Missing userId' });
       return;
     }
 
-    const user = db.users.find((u) => u.id === userId);
+    let user = db.users.find((u) => u.id === userId);
+    if (!user && firestoreDb) {
+      try {
+        const cloudDoc = await Promise.race([
+          getDoc(doc(firestoreDb, 'users', String(userId))),
+          new Promise<null>((resolve) => setTimeout(() => resolve(null), 5000)),
+        ]);
+        if (cloudDoc && cloudDoc.exists()) {
+          user = cloudDoc.data() as User;
+          db.users.push(user);
+          saveDatabase(db);
+        }
+      } catch {}
+    }
+
     if (!user || user.status === 'inactive') {
       res.json({ valid: false, user: null });
       return;
@@ -1484,7 +1552,7 @@ async function startServer() {
   });
 
   // Batch import/sync users (e.g. from CSV or organizational rosters)
-  app.post('/api/users/batch', (req: Request, res: Response) => {
+  app.post('/api/users/batch', async (req: Request, res: Response) => {
     const { users: incomingUsers } = req.body;
     if (!Array.isArray(incomingUsers) || incomingUsers.length === 0) {
       res.status(400).json({ error: 'ไม่พบรายการผู้ใช้งานที่ต้องการนำเข้า' });
@@ -1493,6 +1561,7 @@ async function startServer() {
 
     let importedCount = 0;
     let updatedCount = 0;
+    const touchedUsers: User[] = [];
 
     for (const item of incomingUsers) {
       if (!item.fullName || !item.username) continue;
@@ -1523,11 +1592,12 @@ async function startServer() {
           status: item.status || db.users[existingIdx].status || 'active',
           password: item.password ? String(item.password).trim() : db.users[existingIdx].password,
         };
+        touchedUsers.push(db.users[existingIdx]);
         updatedCount++;
       } else {
         // Create new
         const newUid = item.id || `usr_${Date.now().toString(36)}_${Math.random().toString(36).substring(2, 6)}`;
-        db.users.push({
+        const createdUser: User = {
           id: newUid,
           username: cleanUsername,
           password: item.password ? String(item.password).trim() : '123456',
@@ -1540,12 +1610,19 @@ async function startServer() {
           employeeCode: item.employeeCode ? String(item.employeeCode).trim() : `EMP-${Math.floor(100 + Math.random() * 900)}`,
           status: item.status === 'inactive' ? 'inactive' : 'active',
           createdAt: new Date().toISOString(),
-        });
+        };
+        db.users.push(createdUser);
+        touchedUsers.push(createdUser);
         importedCount++;
       }
     }
 
     saveDatabase(db);
+    dbVersion = Date.now();
+    for (const u of touchedUsers) {
+      await firestoreSet('users', u.id, u);
+    }
+
     res.json({
       message: `นำเข้าข้อมูลสำเร็จ: เพิ่มใหม่ ${importedCount} รายการ, อัปเดต ${updatedCount} รายการ`,
       importedCount,

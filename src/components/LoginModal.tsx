@@ -86,36 +86,34 @@ export const LoginModal: React.FC<LoginModalProps> = ({ onLoginSuccess }) => {
     }
   }, []);
 
+  const [passwordManuallyTyped, setPasswordManuallyTyped] = useState(false);
+
+  const fetchCentralUsers = async () => {
+    try {
+      const users = await api.getUsers();
+      if (users && users.length > 0) {
+        setAllUsers(users);
+        setDbStatus((prev) => ({
+          ...prev,
+          connected: true,
+          userCount: users.length,
+        }));
+      }
+      const depts = await api.getDepartments();
+      if (depts) {
+        setDbStatus((prev) => ({
+          ...prev,
+          deptCount: depts.length,
+        }));
+      }
+    } catch (e) {
+      console.warn('Central database check:', e);
+    }
+  };
+
   // Load existing users from the central database on mount
   useEffect(() => {
-    let isMounted = true;
-    const fetchCentralUsers = async () => {
-      try {
-        const users = await api.getUsers();
-        if (isMounted && users && users.length > 0) {
-          setAllUsers(users);
-          setDbStatus((prev) => ({
-            ...prev,
-            connected: true,
-            userCount: users.length,
-          }));
-        }
-        const depts = await api.getDepartments();
-        if (isMounted && depts) {
-          setDbStatus((prev) => ({
-            ...prev,
-            deptCount: depts.length,
-          }));
-        }
-      } catch (e) {
-        console.warn('Central database check:', e);
-      }
-    };
-
     fetchCentralUsers();
-    return () => {
-      isMounted = false;
-    };
   }, []);
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -142,6 +140,7 @@ export const LoginModal: React.FC<LoginModalProps> = ({ onLoginSuccess }) => {
   const handleQuickLogin = async (user: string, pass: string) => {
     setUsername(user);
     setPassword(pass);
+    setPasswordManuallyTyped(false);
     setIsLoading(true);
     setErrorMsg(null);
 
@@ -160,10 +159,12 @@ export const LoginModal: React.FC<LoginModalProps> = ({ onLoginSuccess }) => {
     setUsername(user.username);
     setIsUsersDropdownOpen(false);
     setErrorMsg(null);
-    if (user.username === 'admin') {
-      setPassword('admin123');
-    } else {
-      setPassword('123456');
+    if (!passwordManuallyTyped || !password) {
+      if (user.username === 'admin') {
+        setPassword('admin123');
+      } else {
+        setPassword('123456');
+      }
     }
   };
 
@@ -275,9 +276,9 @@ export const LoginModal: React.FC<LoginModalProps> = ({ onLoginSuccess }) => {
           <div>
             <div className="flex items-center justify-between mb-1">
               <label className="text-xs font-semibold text-slate-700">
-                ชื่อผู้ใช้งาน (Username)
+                ชื่อผู้ใช้งาน (Username / รหัสพนักงาน / ชื่อ-สกุล)
               </label>
-              {allUsers.length > 0 && (
+              {allUsers.length > 0 ? (
                 <button
                   type="button"
                   onClick={() => setIsUsersDropdownOpen(!isUsersDropdownOpen)}
@@ -285,6 +286,15 @@ export const LoginModal: React.FC<LoginModalProps> = ({ onLoginSuccess }) => {
                 >
                   <span>เลือกจากรายชื่อที่ Admin สร้าง</span>
                   {isUsersDropdownOpen ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={fetchCentralUsers}
+                  className="text-[11px] text-indigo-600 hover:text-indigo-800 font-medium flex items-center gap-1 cursor-pointer"
+                >
+                  <RefreshCw className="w-3 h-3" />
+                  <span>โหลดรายชื่อ</span>
                 </button>
               )}
             </div>
@@ -294,9 +304,16 @@ export const LoginModal: React.FC<LoginModalProps> = ({ onLoginSuccess }) => {
               <input
                 type="text"
                 required
+                autoCapitalize="none"
+                autoCorrect="off"
+                spellCheck={false}
+                autoComplete="username"
                 value={username}
-                onChange={(e) => setUsername(e.target.value)}
-                placeholder="กรอก Username ของคุณ เช่น admin, somchai..."
+                onChange={(e) => {
+                  setUsername(e.target.value);
+                  if (errorMsg) setErrorMsg(null);
+                }}
+                placeholder="กรอก Username, รหัสพนักงาน หรือชื่อ-นามสกุล..."
                 className="w-full pl-10 pr-4 py-2.5 text-xs sm:text-sm bg-slate-50 rounded-xl border border-slate-200 focus:bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500 transition"
               />
             </div>
@@ -380,8 +397,17 @@ export const LoginModal: React.FC<LoginModalProps> = ({ onLoginSuccess }) => {
               <input
                 type={showPassword ? 'text' : 'password'}
                 required
+                autoCapitalize="none"
+                autoCorrect="off"
+                spellCheck={false}
+                autoComplete="current-password"
                 value={password}
-                onChange={(e) => setPassword(e.target.value)}
+                onChange={(e) => {
+                  const val = e.target.value;
+                  setPassword(val);
+                  setPasswordManuallyTyped(val.length > 0);
+                  if (errorMsg) setErrorMsg(null);
+                }}
                 placeholder="กรอกรหัสผ่านของคุณ"
                 className="w-full pl-10 pr-10 py-2.5 text-xs sm:text-sm bg-slate-50 rounded-xl border border-slate-200 focus:bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500 transition"
               />

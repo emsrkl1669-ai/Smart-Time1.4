@@ -229,13 +229,12 @@ export default function App() {
         if (!prev) return null;
         const fresh = u.find((item) => item.id === prev.id);
         if (fresh) {
+          if (fresh.status === 'inactive') {
+            api.logout();
+            return null;
+          }
           api.setCurrentUser(fresh);
           return fresh;
-        }
-        // If user was deleted on central server by Admin and u is not empty, log them out gracefully
-        if (!fresh && u.length > 0 && prev.username !== 'admin') {
-          api.logout();
-          return null;
         }
         return prev;
       });

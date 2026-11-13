@@ -1,5 +1,13 @@
 import { User, Department, AttendanceRecord, SystemSettings, LineNotificationLog, AuthResponse, WorkLocation } from '../types';
 import { getThaiDateTime, setServerTimeOffset } from '../utils/thaiTime';
+import {
+  authenticateWithFirestore,
+  verifyUserWithFirestore,
+  getUsersFromFirestore,
+  getDepartmentsFromFirestore,
+  getLocationsFromFirestore,
+  getSettingsFromFirestore,
+} from './firebase';
 
 const STORAGE_KEYS = {
   CURRENT_USER: 'smart_attendance_current_user',
@@ -177,76 +185,167 @@ export const api = {
       return this.getCurrentUser();
     }
     try {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 7000);
       const res = await fetch('/api/auth/verify', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-cache' },
         body: JSON.stringify({ userId }),
-      });
-      if (res.ok) {
+        signal: controller.signal,
+      }).finally(() => clearTimeout(timer));
+
+      const contentType = res.headers.get('content-type') || '';
+      if (res.ok && contentType.includes('application/json')) {
         const data = await res.json();
         if (data.valid && data.user) {
           this.setCurrentUser(data.user);
           return data.user;
         } else if (data.valid === false) {
-          console.warn('Session no longer valid on central server, logging out');
-          this.logout();
-          return null;
+          // Cross-check Firestore before force-logging out (prevents split-brain logout)
+          const fbCheck = await verifyUserWithFirestore(userId);
+          if (fbCheck.checked && fbCheck.valid && fbCheck.user) {
+            this.setCurrentUser(fbCheck.user);
+            return fbCheck.user;
+          }
+          if (fbCheck.checked && !fbCheck.valid) {
+            console.warn('Session no longer valid on central server/Firestore, logging out');
+            this.logout();
+            return null;
+          }
         }
       }
     } catch (e) {
-      console.warn('Session verification fallback to cache');
+      console.warn('Session verification checking Firestore fallback');
+      const fbCheck = await verifyUserWithFirestore(userId);
+      if (fbCheck.checked && fbCheck.valid && fbCheck.user) {
+        this.setCurrentUser(fbCheck.user);
+        return fbCheck.user;
+      }
+      if (fbCheck.checked && !fbCheck.valid) {
+        this.logout();
+        return null;
+      }
     }
     return this.getCurrentUser();
   },
 
-  // Auth: Login with remember device option
-  async login(username: string, password: string, rememberDevice: boolean = true): Promise<AuthResponse> {
-    if (rememberDevice) {
-      setRememberedUsername(username);
+  // Helper to persist successful auth locally
+  _completeClientLogin(data: AuthResponse): AuthResponse {
+    this.setCurrentUser(data.user);
+    setCache(STORAGE_KEYS.TOKEN, data.token);
+
+    const cachedUsers = getCache<User[]>(STORAGE_KEYS.CACHED_USERS) || [];
+    const idx = cachedUsers.findIndex((u) => u.id === data.user.id);
+    if (idx !== -1) {
+      cachedUsers[idx] = data.user;
+    } else {
+      cachedUsers.push(data.user);
     }
+    setCache(STORAGE_KEYS.CACHED_USERS, cachedUsers);
+    return data;
+  },
+
+  // Auth: Login with remember device option + Cloud Firestore & cross-browser fallback
+  async login(username: string, password: string, rememberDevice: boolean = true): Promise<AuthResponse> {
+    const cleanIdentifier = String(username || '').trim().replace(/^@+/, '');
+    const cleanPassword = String(password ?? '').trim();
+
+    if (!cleanIdentifier || !cleanPassword) {
+      throw new Error('กรุณากรอก Username และ Password');
+    }
+
+    if (rememberDevice) {
+      setRememberedUsername(cleanIdentifier);
+    }
+
+    let serverAuthRejectedMsg: string | null = null;
 
     if (isOnline()) {
       try {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 9000);
         const res = await fetch('/api/auth/login', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-cache' },
-          body: JSON.stringify({ username, password }),
-        });
+          body: JSON.stringify({ username: cleanIdentifier, password: cleanPassword }),
+          signal: controller.signal,
+        }).finally(() => clearTimeout(timer));
 
-        if (!res.ok) {
+        const contentType = res.headers.get('content-type') || '';
+        const isJson = contentType.includes('application/json');
+
+        if (res.ok && isJson) {
+          const data: AuthResponse = await res.json();
+          if (data && data.user) {
+            return this._completeClientLogin(data);
+          }
+        }
+
+        if (isJson && (res.status === 400 || res.status === 401 || res.status === 403)) {
           const err = await res.json().catch(() => ({}));
-          throw new Error(err.error || 'เข้าสู่ระบบไม่สำเร็จ');
+          if (res.status === 403) {
+            throw new Error(err.error || 'บัญชีผู้ใช้นี้ถูกระงับการใช้งาน กรุณาติดต่อผู้ดูแลระบบ');
+          }
+          serverAuthRejectedMsg = err.error || 'ชื่อผู้ใช้งานหรือรหัสผ่านไม่ถูกต้อง';
         }
-
-        const data: AuthResponse = await res.json();
-        this.setCurrentUser(data.user);
-        setCache(STORAGE_KEYS.TOKEN, data.token);
-
-        // Update cached users in case we need offline later
-        const cachedUsers = getCache<User[]>(STORAGE_KEYS.CACHED_USERS) || [];
-        const idx = cachedUsers.findIndex((u) => u.id === data.user.id);
-        if (idx !== -1) {
-          cachedUsers[idx] = data.user;
-        } else {
-          cachedUsers.push(data.user);
-        }
-        setCache(STORAGE_KEYS.CACHED_USERS, cachedUsers);
-
-        return data;
       } catch (err: any) {
-        if (!err.message?.includes('Failed to fetch')) {
+        // Explicit 403 error should stop immediately
+        if (err?.message && err.message.includes('ถูกระงับการใช้งาน')) {
           throw err;
         }
+        console.warn('Backend /api/auth/login unavailable, switching to Cloud Firestore auth:', err?.message);
+      }
+
+      // Direct Cloud Firestore Fallback / Cross-Verification
+      try {
+        const fbAuth = await authenticateWithFirestore(cleanIdentifier, cleanPassword);
+        return this._completeClientLogin(fbAuth);
+      } catch (fbErr: any) {
+        const msg = String(fbErr?.message || '');
+        const isAuthRejection =
+          msg.includes('ชื่อผู้ใช้งานหรือรหัสผ่านไม่ถูกต้อง') ||
+          msg.includes('ถูกระงับการใช้งาน') ||
+          msg.includes('ไม่พบข้อมูลบัญชีผู้ใช้ในฐานข้อมูล Cloud');
+
+        if (isAuthRejection) {
+          throw new Error(serverAuthRejectedMsg || msg);
+        }
+        // If server gave explicit 401 and Firestore had a transport error, surface the explicit 401
+        if (serverAuthRejectedMsg) {
+          throw new Error(serverAuthRejectedMsg);
+        }
+        console.warn('Firestore direct auth unavailable, checking local cache:', msg);
       }
     }
 
+    if (serverAuthRejectedMsg) {
+      throw new Error(serverAuthRejectedMsg);
+    }
+
     // Offline login fallback: Check if user exists in local cache
+    const lowerId = cleanIdentifier.toLowerCase();
+    const compactId = cleanIdentifier.replace(/\s+/g, '').toLowerCase();
     const cachedUsers = getCache<User[]>(STORAGE_KEYS.CACHED_USERS) || [];
-    const matched = cachedUsers.find(
-      (u) => u.username.toLowerCase() === username.trim().toLowerCase()
-    );
+    const currentCached = this.getCurrentUser();
+    const candidatePool = currentCached && !cachedUsers.some((u) => u.id === currentCached.id)
+      ? [currentCached, ...cachedUsers]
+      : cachedUsers;
+
+    const matched = candidatePool.find((u) => {
+      const uName = String(u.username || '').trim().toLowerCase();
+      const empCode = String(u.employeeCode || '').trim().toLowerCase();
+      const fullCompact = String(u.fullName || '').replace(/\s+/g, '').toLowerCase();
+      return (
+        uName === lowerId ||
+        (empCode !== '' && empCode === lowerId) ||
+        (compactId !== '' && fullCompact === compactId)
+      );
+    });
 
     if (matched) {
+      if (matched.status === 'inactive') {
+        throw new Error('บัญชีผู้ใช้นี้ถูกระงับการใช้งาน กรุณาติดต่อผู้ดูแลระบบ');
+      }
       this.setCurrentUser(matched);
       return {
         user: matched,
@@ -254,7 +353,11 @@ export const api = {
       };
     }
 
-    throw new Error('ไม่สามารถเข้าสู่ระบบในโหมดออฟไลน์ได้ (บัญชีนี้ยังไม่เคยล็อกอินบนอุปกรณ์นี้)');
+    throw new Error(
+      isOnline()
+        ? 'ไม่สามารถเชื่อมต่อระบบยืนยันตัวตนได้ชั่วคราว กรุณาลองใหม่อีกครั้ง'
+        : 'ไม่สามารถเข้าสู่ระบบในโหมดออฟไลน์ได้ (บัญชีนี้ยังไม่เคยล็อกอินบนอุปกรณ์นี้)'
+    );
   },
 
   logout() {
@@ -266,13 +369,22 @@ export const api = {
     if (isOnline()) {
       try {
         const res = await freshFetch('/api/users');
-        if (res.ok) {
+        const contentType = res.headers.get('content-type') || '';
+        if (res.ok && contentType.includes('application/json')) {
           const users = await res.json();
-          setCache(STORAGE_KEYS.CACHED_USERS, users);
-          return users;
+          if (Array.isArray(users)) {
+            setCache(STORAGE_KEYS.CACHED_USERS, users);
+            return users;
+          }
         }
       } catch (e) {
-        console.warn('Network error, loading cached users');
+        console.warn('Network error loading /api/users, checking Firestore');
+      }
+
+      const fbUsers = await getUsersFromFirestore();
+      if (fbUsers && fbUsers.length > 0) {
+        setCache(STORAGE_KEYS.CACHED_USERS, fbUsers);
+        return fbUsers;
       }
     }
     return getCache<User[]>(STORAGE_KEYS.CACHED_USERS) || [];
@@ -404,13 +516,22 @@ export const api = {
     if (isOnline()) {
       try {
         const res = await freshFetch('/api/departments');
-        if (res.ok) {
+        const contentType = res.headers.get('content-type') || '';
+        if (res.ok && contentType.includes('application/json')) {
           const departments = await res.json();
-          setCache(STORAGE_KEYS.CACHED_DEPARTMENTS, departments);
-          return departments;
+          if (Array.isArray(departments)) {
+            setCache(STORAGE_KEYS.CACHED_DEPARTMENTS, departments);
+            return departments;
+          }
         }
       } catch (e) {
-        console.warn('Network error, loading cached departments');
+        console.warn('Network error, checking Firestore departments');
+      }
+
+      const fbDepts = await getDepartmentsFromFirestore();
+      if (fbDepts && fbDepts.length > 0) {
+        setCache(STORAGE_KEYS.CACHED_DEPARTMENTS, fbDepts);
+        return fbDepts;
       }
     }
     return getCache<Department[]>(STORAGE_KEYS.CACHED_DEPARTMENTS) || [];
@@ -464,13 +585,22 @@ export const api = {
     if (isOnline()) {
       try {
         const res = await freshFetch('/api/locations');
-        if (res.ok) {
+        const contentType = res.headers.get('content-type') || '';
+        if (res.ok && contentType.includes('application/json')) {
           const locations = await res.json();
-          setCache(STORAGE_KEYS.CACHED_LOCATIONS, locations);
-          return locations;
+          if (Array.isArray(locations)) {
+            setCache(STORAGE_KEYS.CACHED_LOCATIONS, locations);
+            return locations;
+          }
         }
       } catch (e) {
-        console.warn('Network error, loading cached locations');
+        console.warn('Network error, checking Firestore locations');
+      }
+
+      const fbLocs = await getLocationsFromFirestore();
+      if (fbLocs && fbLocs.length > 0) {
+        setCache(STORAGE_KEYS.CACHED_LOCATIONS, fbLocs);
+        return fbLocs;
       }
     }
     return getCache<WorkLocation[]>(STORAGE_KEYS.CACHED_LOCATIONS) || [];
@@ -804,13 +934,20 @@ export const api = {
     if (isOnline()) {
       try {
         const res = await freshFetch('/api/settings');
-        if (res.ok) {
+        const contentType = res.headers.get('content-type') || '';
+        if (res.ok && contentType.includes('application/json')) {
           const settings = await res.json();
           setCache(STORAGE_KEYS.CACHED_SETTINGS, settings);
           return settings;
         }
       } catch (e) {
         console.warn('Network error loading settings');
+      }
+
+      const fbSettings = await getSettingsFromFirestore();
+      if (fbSettings) {
+        setCache(STORAGE_KEYS.CACHED_SETTINGS, fbSettings);
+        return fbSettings;
       }
     }
     return (
