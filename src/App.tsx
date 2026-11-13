@@ -117,8 +117,8 @@ export default function App() {
       setCurrentTime(new Date());
     }, 1000);
 
-    // Central Database real-time sync polling (every 3s):
-    // Checks lightweight /api/sync-check version; if DB changed on ANY device, immediately reloads data
+    // Central Database real-time sync polling (every 15s):
+    // Checks lightweight /api/sync-check version (0 Firestore reads on Express server); if DB changed on ANY device, reloads data
     const pollSync = async () => {
       if (typeof document !== 'undefined' && document.visibilityState === 'visible' && isOnline()) {
         try {
@@ -137,27 +137,32 @@ export default function App() {
       }
     };
 
-    const dbPollTimer = setInterval(pollSync, 3000);
+    const dbPollTimer = setInterval(pollSync, 15000);
 
     // Instant local synchronization across browser tabs/windows
     const unsubscribeMutations = subscribeToLocalMutations(() => {
       loadAllData();
     });
 
-    // Real-time Cloud Firestore subscription (updates immediately across smart-sime14.vercel.app & all devices)
+    // Real-time Cloud Firestore subscription (single _meta/sync doc)
     const unsubscribeRealtime = subscribeToFirestoreRealtimeSync(() => {
       loadAllData();
     });
 
+    let lastFocusCheckMs = 0;
     const handleVisibilityOrFocus = () => {
-      if (isOnline()) {
-        pollSync();
-        loadAllData();
-        const pending = getOfflineQueue();
-        if (pending.length > 0) {
-          handleSyncOffline();
-        }
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
+      if (!isOnline()) return;
+
+      const pending = getOfflineQueue();
+      if (pending.length > 0) {
+        handleSyncOffline();
       }
+
+      const nowMs = Date.now();
+      if (nowMs - lastFocusCheckMs < 15000) return;
+      lastFocusCheckMs = nowMs;
+      pollSync();
     };
 
     document.addEventListener('visibilitychange', handleVisibilityOrFocus);

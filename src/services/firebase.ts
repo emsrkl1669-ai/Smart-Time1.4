@@ -62,11 +62,43 @@ export interface FirestoreErrorInfo {
   };
 }
 
+let clientQuotaExhaustedUntil = 0;
+const CLIENT_QUOTA_COOLDOWN_MS = 15 * 60 * 1000;
+
+export function isQuotaExceededError(err: unknown): boolean {
+  const msg = String((err as any)?.message || err || '').toLowerCase();
+  const code = String((err as any)?.code || '').toLowerCase();
+  return (
+    code === 'resource-exhausted' ||
+    msg.includes('quota limit exceeded') ||
+    msg.includes('quota exceeded') ||
+    msg.includes('resource_exhausted') ||
+    msg.includes('resource-exhausted') ||
+    msg.includes('free daily read units')
+  );
+}
+
+export function markClientQuotaLimited(): void {
+  const wasLimited = Date.now() < clientQuotaExhaustedUntil;
+  clientQuotaExhaustedUntil = Date.now() + CLIENT_QUOTA_COOLDOWN_MS;
+  if (!wasLimited) {
+    console.warn('Firestore free daily read quota reached; using local central database fallback for 15m.');
+  }
+}
+
+export function isFirestoreQuotaLimited(): boolean {
+  return Date.now() < clientQuotaExhaustedUntil;
+}
+
 export function handleFirestoreError(
   error: unknown,
   operationType: OperationType,
   path: string | null
 ): never {
+  if (isQuotaExceededError(error)) {
+    markClientQuotaLimited();
+  }
+
   let currentUserId: string | undefined;
   try {
     const rawUser =
@@ -146,6 +178,7 @@ function buildBangkokTimestamp(dateStr: string, timeStr: string, fallbackIso?: s
 }
 
 export async function bumpFirestoreSyncMeta(): Promise<void> {
+  if (isFirestoreQuotaLimited()) return;
   try {
     await withTimeout(
       setDoc(doc(db, '_meta', 'sync'), {
@@ -156,6 +189,10 @@ export async function bumpFirestoreSyncMeta(): Promise<void> {
       5000
     );
   } catch (e) {
+    if (isQuotaExceededError(e)) {
+      markClientQuotaLimited();
+      return;
+    }
     console.warn('Could not bump Firestore sync meta:', e);
   }
 }
@@ -164,10 +201,23 @@ export async function bumpFirestoreSyncMeta(): Promise<void> {
  * Validate Connection to Firestore (Per skill requirement: call getDocFromServer)
  */
 export async function testFirestoreConnection(): Promise<{ success: boolean; error?: string }> {
+  if (isFirestoreQuotaLimited()) {
+    return {
+      success: false,
+      error: 'Firestore free daily quota cooldown active (using local central database)',
+    };
+  }
   try {
     await getDocFromServer(doc(db, '_health', 'status'));
     return { success: true };
   } catch (error: any) {
+    if (isQuotaExceededError(error)) {
+      markClientQuotaLimited();
+      return {
+        success: false,
+        error: 'Firestore free daily read quota exceeded (using local central database)',
+      };
+    }
     if (error instanceof Error && error.message.includes('the client is offline')) {
       console.warn('Firestore offline or connection issue. Please check network/config.');
     }
@@ -258,6 +308,10 @@ export async function authenticateWithFirestore(
   identifier: string,
   password: string
 ): Promise<AuthResponse> {
+  if (isFirestoreQuotaLimited()) {
+    throw new Error('Firestore free daily quota limit exceeded');
+  }
+
   const cleanIdentifier = normalizeIdentifierText(identifier);
   const lowerIdentifier = cleanIdentifier.toLowerCase();
   const compactIdentifier = cleanIdentifier.replace(/\s+/g, '').toLowerCase();
@@ -265,13 +319,22 @@ export async function authenticateWithFirestore(
   const cleanPassword = normalizeIdentifierText(password);
 
   let users: User[] = [];
+  let hitQuota = false;
   try {
     const snap = await withTimeout(getDocs(collection(db, 'users')), 10000);
     if (!snap.empty) {
       snap.forEach((d) => users.push(d.data() as User));
     }
-  } catch {
+  } catch (err) {
+    if (isQuotaExceededError(err)) {
+      markClientQuotaLimited();
+      hitQuota = true;
+    }
     // Fall back cleanly to Firestore REST API for legacy browsers / restricted networks
+  }
+
+  if (hitQuota) {
+    throw new Error('Firestore free daily quota limit exceeded');
   }
 
   if (users.length === 0) {
@@ -330,6 +393,9 @@ export async function authenticateWithFirestore(
 export async function verifyUserWithFirestore(
   userId: string
 ): Promise<{ checked: boolean; valid: boolean; user: User | null }> {
+  if (isFirestoreQuotaLimited()) {
+    return { checked: false, valid: true, user: null };
+  }
   try {
     const snap = await withTimeout(getDoc(doc(db, 'users', String(userId))), 6000);
     if (!snap.exists()) {
@@ -341,7 +407,11 @@ export async function verifyUserWithFirestore(
     }
     const { password: _, ...safeUser } = raw;
     return { checked: true, valid: true, user: safeUser };
-  } catch {
+  } catch (err) {
+    if (isQuotaExceededError(err)) {
+      markClientQuotaLimited();
+      return { checked: false, valid: true, user: null };
+    }
     const restUsers = await fetchCollectionViaRest<User>('users');
     if (restUsers && restUsers.length > 0) {
       const found = restUsers.find((u) => u.id === userId);
@@ -356,6 +426,7 @@ export async function verifyUserWithFirestore(
 }
 
 export async function getUsersFromFirestore(): Promise<User[] | null> {
+  if (isFirestoreQuotaLimited()) return null;
   try {
     const snap = await withTimeout(getDocs(collection(db, 'users')), 7000);
     if (!snap.empty) {
@@ -366,7 +437,11 @@ export async function getUsersFromFirestore(): Promise<User[] | null> {
       });
       return list;
     }
-  } catch {
+  } catch (err) {
+    if (isQuotaExceededError(err)) {
+      markClientQuotaLimited();
+      return null;
+    }
     // fallback to REST
   }
   const restUsers = await fetchCollectionViaRest<User>('users');
@@ -377,6 +452,7 @@ export async function getUsersFromFirestore(): Promise<User[] | null> {
 }
 
 export async function getUsersWithPasswordsFromFirestore(): Promise<(User & { password?: string })[] | null> {
+  if (isFirestoreQuotaLimited()) return null;
   try {
     const snap = await withTimeout(getDocs(collection(db, 'users')), 7000);
     if (!snap.empty) {
@@ -384,7 +460,11 @@ export async function getUsersWithPasswordsFromFirestore(): Promise<(User & { pa
       snap.forEach((d) => list.push(d.data() as User & { password?: string }));
       return list;
     }
-  } catch {
+  } catch (err) {
+    if (isQuotaExceededError(err)) {
+      markClientQuotaLimited();
+      return null;
+    }
     // fallback to REST
   }
   const restUsers = await fetchCollectionViaRest<User & { password?: string }>('users');
@@ -392,6 +472,7 @@ export async function getUsersWithPasswordsFromFirestore(): Promise<(User & { pa
 }
 
 export async function getDepartmentsFromFirestore(): Promise<Department[] | null> {
+  if (isFirestoreQuotaLimited()) return null;
   try {
     const snap = await withTimeout(getDocs(collection(db, 'departments')), 7000);
     if (!snap.empty) {
@@ -399,7 +480,11 @@ export async function getDepartmentsFromFirestore(): Promise<Department[] | null
       snap.forEach((d) => list.push(d.data() as Department));
       return list;
     }
-  } catch {
+  } catch (err) {
+    if (isQuotaExceededError(err)) {
+      markClientQuotaLimited();
+      return null;
+    }
     // fallback to REST
   }
   const restDepts = await fetchCollectionViaRest<Department>('departments');
@@ -407,6 +492,7 @@ export async function getDepartmentsFromFirestore(): Promise<Department[] | null
 }
 
 export async function getLocationsFromFirestore(): Promise<WorkLocation[] | null> {
+  if (isFirestoreQuotaLimited()) return null;
   try {
     const snap = await withTimeout(getDocs(collection(db, 'locations')), 7000);
     if (!snap.empty) {
@@ -414,7 +500,11 @@ export async function getLocationsFromFirestore(): Promise<WorkLocation[] | null
       snap.forEach((d) => list.push(d.data() as WorkLocation));
       return list;
     }
-  } catch {
+  } catch (err) {
+    if (isQuotaExceededError(err)) {
+      markClientQuotaLimited();
+      return null;
+    }
     // fallback to REST
   }
   const restLocs = await fetchCollectionViaRest<WorkLocation>('locations');
@@ -429,6 +519,7 @@ export async function getAttendanceFromFirestore(params?: {
   startDate?: string;
   endDate?: string;
 }): Promise<AttendanceRecord[] | null> {
+  if (isFirestoreQuotaLimited()) return null;
   try {
     const snap = await withTimeout(getDocs(collection(db, 'attendance')), 9000);
     if (snap.empty) return [];
@@ -444,17 +535,24 @@ export async function getAttendanceFromFirestore(params?: {
 
     list.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
     return list;
-  } catch {
+  } catch (err) {
+    if (isQuotaExceededError(err)) {
+      markClientQuotaLimited();
+    }
     return null;
   }
 }
 
 export async function getSettingsFromFirestore(): Promise<SystemSettings | null> {
+  if (isFirestoreQuotaLimited()) return null;
   try {
     const snap = await withTimeout(getDoc(doc(db, 'settings', 'global')), 6000);
     if (!snap.exists()) return null;
     return snap.data() as SystemSettings;
-  } catch {
+  } catch (err) {
+    if (isQuotaExceededError(err)) {
+      markClientQuotaLimited();
+    }
     return null;
   }
 }
@@ -1360,6 +1458,7 @@ export async function getSyncMetaFromFirestore(): Promise<{
   serverTime: string;
   timestamp: number;
 } | null> {
+  if (isFirestoreQuotaLimited()) return null;
   try {
     const snap = await withTimeout(getDoc(doc(db, '_meta', 'sync')), 5000);
     if (!snap.exists()) return null;
@@ -1373,55 +1472,64 @@ export async function getSyncMetaFromFirestore(): Promise<{
       serverTime: new Date().toISOString(),
       timestamp: Date.now(),
     };
-  } catch {
+  } catch (err) {
+    if (isQuotaExceededError(err)) {
+      markClientQuotaLimited();
+    }
     return null;
   }
 }
 
 export function subscribeToFirestoreRealtimeSync(onChange: () => void): () => void {
+  if (isFirestoreQuotaLimited()) {
+    return () => {};
+  }
+
   let metaInitialized = false;
-  let attendanceInitialized = false;
   let debounceTimer: ReturnType<typeof setTimeout> | null = null;
+  let unsubMeta: (() => void) | null = null;
 
   const triggerReload = () => {
     if (debounceTimer) clearTimeout(debounceTimer);
     debounceTimer = setTimeout(() => {
       onChange();
-    }, 250);
+    }, 300);
   };
 
-  const unsubMeta = onSnapshot(
-    doc(db, '_meta', 'sync'),
-    () => {
-      if (!metaInitialized) {
-        metaInitialized = true;
-        return;
+  try {
+    unsubMeta = onSnapshot(
+      doc(db, '_meta', 'sync'),
+      () => {
+        if (!metaInitialized) {
+          metaInitialized = true;
+          return;
+        }
+        triggerReload();
+      },
+      (err) => {
+        if (isQuotaExceededError(err)) {
+          markClientQuotaLimited();
+          if (unsubMeta) {
+            try { unsubMeta(); } catch {}
+            unsubMeta = null;
+          }
+          return;
+        }
+        console.warn('Firestore _meta/sync realtime listener warning:', err?.message || err);
       }
-      triggerReload();
-    },
-    (err) => {
-      console.warn('Firestore _meta/sync realtime listener warning:', err?.message || err);
+    );
+  } catch (err) {
+    if (isQuotaExceededError(err)) {
+      markClientQuotaLimited();
     }
-  );
-
-  const unsubAttendance = onSnapshot(
-    collection(db, 'attendance'),
-    () => {
-      if (!attendanceInitialized) {
-        attendanceInitialized = true;
-        return;
-      }
-      triggerReload();
-    },
-    (err) => {
-      console.warn('Firestore attendance realtime listener warning:', err?.message || err);
-    }
-  );
+  }
 
   return () => {
     if (debounceTimer) clearTimeout(debounceTimer);
-    unsubMeta();
-    unsubAttendance();
+    if (unsubMeta) {
+      try { unsubMeta(); } catch {}
+      unsubMeta = null;
+    }
   };
 }
 

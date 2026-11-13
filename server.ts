@@ -41,26 +41,59 @@ try {
   console.warn('Firebase initialization warning:', fbErr);
 }
 
-// Asynchronous Cloud Firestore Helpers
+// Asynchronous Cloud Firestore Helpers with Quota Circuit Breaker
+let firestoreQuotaExhaustedUntil = 0;
+
+function isFirestoreQuotaError(err: any): boolean {
+  const code = String(err?.code || '').toLowerCase();
+  const msg = String(err?.message || err || '');
+  return (
+    code === 'resource-exhausted' ||
+    msg.includes('Quota limit exceeded') ||
+    msg.includes('Quota exceeded') ||
+    msg.includes('RESOURCE_EXHAUSTED')
+  );
+}
+
+function noteFirestoreQuotaHit(context: string, err: any) {
+  const wasLimited = Date.now() < firestoreQuotaExhaustedUntil;
+  firestoreQuotaExhaustedUntil = Date.now() + 15 * 60 * 1000;
+  if (!wasLimited) {
+    console.info(`ℹ️ Cloud Firestore read/write quota reached during ${context}; using local central database until daily quota resets.`);
+  }
+}
+
+function isFirestoreQuotaActive(): boolean {
+  return Date.now() < firestoreQuotaExhaustedUntil;
+}
+
 async function firestoreSet(collectionName: string, docId: string, data: any): Promise<boolean> {
-  if (!firestoreDb) return false;
+  if (!firestoreDb || isFirestoreQuotaActive()) return false;
   try {
     // Replace full document cleanly so cleared/emptied fields never resurrect from old merge data
     const cleanData = JSON.parse(JSON.stringify(data));
     await setDoc(doc(firestoreDb, collectionName, docId), cleanData);
     return true;
   } catch (err) {
-    console.warn(`Firestore write notice (${collectionName}/${docId}):`, err);
+    if (isFirestoreQuotaError(err)) {
+      noteFirestoreQuotaHit(`write ${collectionName}/${docId}`, err);
+    } else {
+      console.warn(`Firestore write notice (${collectionName}/${docId}):`, err);
+    }
     return false;
   }
 }
 
 async function firestoreDelete(collectionName: string, docId: string) {
-  if (!firestoreDb) return;
+  if (!firestoreDb || isFirestoreQuotaActive()) return;
   try {
     await deleteDoc(doc(firestoreDb, collectionName, docId));
   } catch (err) {
-    console.warn(`Firestore delete notice (${collectionName}/${docId}):`, err);
+    if (isFirestoreQuotaError(err)) {
+      noteFirestoreQuotaHit(`delete ${collectionName}/${docId}`, err);
+    } else {
+      console.warn(`Firestore delete notice (${collectionName}/${docId}):`, err);
+    }
   }
 }
 
@@ -72,16 +105,31 @@ const BACKUPS_DIR = path.join(DATA_DIR, 'backups');
 const ATTENDANCE_ARCHIVE_FILE = path.join(DATA_DIR, 'attendance_archive.jsonl');
 const BASELINE_FILE = path.join(DATA_DIR, 'roster_baseline.json');
 const ADMIN_JOURNAL_FILE = path.join(DATA_DIR, 'admin_edits_journal.jsonl');
+const CLOUD_SYNC_VER_FILE = path.join(DATA_DIR, '.cloud_sync_ver');
 let lastBackupTimestamp = new Date().toISOString();
 let dbVersion = Date.now();
 let lastCloudMetaCheck = 0;
 let lastHandledCloudVersion = 0;
+try {
+  if (fs.existsSync(CLOUD_SYNC_VER_FILE)) {
+    const parsed = Number(fs.readFileSync(CLOUD_SYNC_VER_FILE, 'utf-8').trim());
+    if (Number.isFinite(parsed) && parsed > 0) lastHandledCloudVersion = parsed;
+  }
+} catch {}
 let inFlightCloudSync: Promise<void> | null = null;
+
+function persistLastHandledCloudVersion(ver: number) {
+  lastHandledCloudVersion = ver;
+  try {
+    if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
+    fs.writeFileSync(CLOUD_SYNC_VER_FILE, String(ver), 'utf-8');
+  } catch {}
+}
 
 async function firestoreUpdateSyncMeta() {
   dbVersion = Date.now();
-  lastHandledCloudVersion = dbVersion;
-  if (!firestoreDb) return;
+  persistLastHandledCloudVersion(dbVersion);
+  if (!firestoreDb || isFirestoreQuotaActive()) return;
   await firestoreSet('_meta', 'sync', {
     version: dbVersion,
     lastBackupTimestamp,
@@ -96,12 +144,12 @@ async function firestoreUpdateSyncMeta() {
 }
 
 async function syncFromFirestoreIfNewer(force = false): Promise<void> {
-  if (!firestoreDb) return;
+  if (!firestoreDb || isFirestoreQuotaActive()) return;
   if (inFlightCloudSync) {
     return inFlightCloudSync;
   }
   const now = Date.now();
-  if (!force && now - lastCloudMetaCheck < 1000) return;
+  if (!force && now - lastCloudMetaCheck < 10000) return;
   lastCloudMetaCheck = now;
 
   inFlightCloudSync = (async () => {
@@ -114,7 +162,7 @@ async function syncFromFirestoreIfNewer(force = false): Promise<void> {
         const meta = metaSnap.data() as any;
         const remoteVer = Number(meta?.version || 0);
         const isRemoteClientWrite = meta?.source === 'client-firestore' && remoteVer !== lastHandledCloudVersion;
-        if (remoteVer && (remoteVer > dbVersion || isRemoteClientWrite)) {
+        if (remoteVer && (remoteVer > Math.max(dbVersion, lastHandledCloudVersion) || isRemoteClientWrite)) {
           const cloudData = await loadFromFirestore();
           if (cloudData) {
             if (cloudData.users && cloudData.users.length > 0) db.users = cloudData.users;
@@ -125,11 +173,15 @@ async function syncFromFirestoreIfNewer(force = false): Promise<void> {
             saveDatabase(db);
             rewriteAttendanceArchive(db.attendance);
             dbVersion = Math.max(Date.now(), remoteVer);
-            lastHandledCloudVersion = remoteVer;
+            persistLastHandledCloudVersion(remoteVer);
           }
         }
       }
-    } catch {}
+    } catch (err) {
+      if (isFirestoreQuotaError(err)) {
+        noteFirestoreQuotaHit('sync check', err);
+      }
+    }
   })();
 
   try {
@@ -670,7 +722,7 @@ async function saveBackupSnapshotToFirestore(snapshotId: string, payload: any): 
 }
 
 async function loadFromFirestore(): Promise<Partial<DatabaseData> | null> {
-  if (!firestoreDb) return null;
+  if (!firestoreDb || isFirestoreQuotaActive()) return null;
   try {
     const usersSnap = await getDocs(collection(firestoreDb, 'users'));
     if (usersSnap.empty) {
@@ -703,7 +755,11 @@ async function loadFromFirestore(): Promise<Partial<DatabaseData> | null> {
       settings,
     };
   } catch (err) {
-    console.warn('Failed to load from Firestore:', err);
+    if (isFirestoreQuotaError(err)) {
+      noteFirestoreQuotaHit('initial/collection load', err);
+    } else {
+      console.warn('Firestore load notice (using local database):', (err as any)?.message || err);
+    }
     return null;
   }
 }
@@ -1051,36 +1107,74 @@ async function startServer() {
   const app = express();
   const PORT = process.env.PORT ? parseInt(process.env.PORT) : 3000;
 
-  // 0. Cloud Firestore Master Synchronizer (smart-time-ca6f9)
-  try {
-    const cloudData = await Promise.race([
-      loadFromFirestore(),
-      new Promise<null>((resolve) => setTimeout(() => resolve(null), 10000)),
-    ]);
-    if (cloudData && cloudData.users && cloudData.users.length > 0) {
-      console.log(`☁️ Cloud Firestore connected: Loaded ${cloudData.users.length} users and ${cloudData.attendance?.length || 0} attendance records.`);
-      db.users = cloudData.users;
-      if (cloudData.departments && cloudData.departments.length > 0) db.departments = cloudData.departments;
-      if (cloudData.locations && cloudData.locations.length > 0) db.locations = cloudData.locations;
-      if (cloudData.attendance) db.attendance = cloudData.attendance;
-      if (cloudData.settings) db.settings = { ...db.settings, ...cloudData.settings };
-      saveDatabase(db);
-    } else if (firestoreDb) {
-      console.log('☁️ Seeding Cloud Firestore with 57 personnel, work locations, and settings...');
-      await syncAllToFirestore(db);
+  // 0. Cloud Firestore Master Synchronizer (1-doc meta check to conserve read quota)
+  if (firestoreDb) {
+    try {
+      const hasLocalUsers = db.users && db.users.length > 1;
+      let shouldPullCloud = !hasLocalUsers;
+      let remoteMetaVer = 0;
+
+      if (hasLocalUsers) {
+        const metaSnap = await Promise.race([
+          getDoc(doc(firestoreDb, '_meta', 'sync')),
+          new Promise<null>((resolve) => setTimeout(() => resolve(null), 5000)),
+        ]);
+        if (metaSnap && metaSnap.exists()) {
+          remoteMetaVer = Number((metaSnap.data() as any)?.version || 0);
+          if (remoteMetaVer && remoteMetaVer !== lastHandledCloudVersion) {
+            shouldPullCloud = true;
+          }
+        }
+      }
+
+      if (shouldPullCloud && !isFirestoreQuotaActive()) {
+        const cloudData = await Promise.race([
+          loadFromFirestore(),
+          new Promise<null>((resolve) => setTimeout(() => resolve(null), 10000)),
+        ]);
+        if (cloudData && cloudData.users && cloudData.users.length > 0) {
+          console.log(`☁️ Cloud Firestore connected: Loaded ${cloudData.users.length} users and ${cloudData.attendance?.length || 0} attendance records.`);
+          db.users = cloudData.users;
+          if (cloudData.departments && cloudData.departments.length > 0) db.departments = cloudData.departments;
+          if (cloudData.locations && cloudData.locations.length > 0) db.locations = cloudData.locations;
+          if (cloudData.attendance) db.attendance = cloudData.attendance;
+          if (cloudData.settings) db.settings = { ...db.settings, ...cloudData.settings };
+          saveDatabase(db);
+          if (remoteMetaVer) persistLastHandledCloudVersion(remoteMetaVer);
+        } else if (!hasLocalUsers && !isFirestoreQuotaActive()) {
+          console.log('☁️ Seeding Cloud Firestore with 57 personnel, work locations, and settings...');
+          await syncAllToFirestore(db);
+        }
+      } else {
+        console.log(`✅ Local central database is up to date with Cloud Firestore (${db.users.length} users, ${db.attendance.length} records).`);
+      }
+    } catch (cloudErr) {
+      if (isFirestoreQuotaError(cloudErr)) {
+        noteFirestoreQuotaHit('startup check', cloudErr);
+      } else {
+        console.warn('Cloud Firestore startup sync notice:', (cloudErr as any)?.message || cloudErr);
+      }
     }
-  } catch (cloudErr) {
-    console.warn('Cloud Firestore startup sync notice:', cloudErr);
   }
 
-  // Real-time Firestore listener on server so direct client/Vercel writes propagate immediately
-  if (firestoreDb) {
+  // Real-time Firestore listener on server so direct client/Vercel writes propagate automatically without polling reads
+  let unsubServerMetaListener: (() => void) | null = null;
+  if (firestoreDb && !isFirestoreQuotaActive()) {
     let initialMetaSeen = false;
-    onSnapshot(
+    unsubServerMetaListener = onSnapshot(
       doc(firestoreDb, '_meta', 'sync'),
       (snap) => {
         if (!initialMetaSeen) {
           initialMetaSeen = true;
+          if (snap.exists()) {
+            const meta = snap.data() as any;
+            const remoteVer = Number(meta?.version || 0);
+            if (remoteVer && meta?.source === 'client-firestore' && remoteVer !== lastHandledCloudVersion) {
+              syncFromFirestoreIfNewer(true).catch(() => {});
+            } else if (remoteVer) {
+              persistLastHandledCloudVersion(remoteVer);
+            }
+          }
           return;
         }
         if (snap.exists()) {
@@ -1092,7 +1186,15 @@ async function startServer() {
         }
       },
       (err) => {
-        console.warn('Server Firestore _meta/sync listener note:', err?.message || err);
+        if (isFirestoreQuotaError(err)) {
+          noteFirestoreQuotaHit('realtime listener', err);
+          if (unsubServerMetaListener) {
+            try { unsubServerMetaListener(); } catch {}
+            unsubServerMetaListener = null;
+          }
+        } else {
+          console.warn('Server Firestore _meta/sync listener note:', err?.message || err);
+        }
       }
     );
   }
@@ -1137,13 +1239,13 @@ async function startServer() {
       attendanceCount: db.attendance.length,
       departmentsCount: db.departments.length,
       locationsCount: db.locations.length,
+      quotaLimited: isFirestoreQuotaActive(),
       timestamp: new Date().toISOString(),
     });
   });
 
-  // 1.0 Real-Time Instant Sync-Check for Cross-Device Consistency
-  app.get('/api/sync-check', async (req: Request, res: Response) => {
-    await syncFromFirestoreIfNewer();
+  // 1.0 Real-Time Instant Sync-Check (serves local version in-memory; onSnapshot updates it in real time with 0 polling reads)
+  app.get('/api/sync-check', (req: Request, res: Response) => {
     res.json({
       version: dbVersion,
       lastModified: lastBackupTimestamp,
@@ -1253,8 +1355,8 @@ async function startServer() {
 
     let user = findMatchingUser(db.users);
 
-    // If user not found or password mismatched in local memory, refresh from Cloud Firestore on demand
-    if ((!user || !verifyUserPassword(user)) && firestoreDb) {
+    // If user not found or password mismatched in local memory, check Cloud Firestore only if quota is not limited
+    if ((!user || !verifyUserPassword(user)) && firestoreDb && !isFirestoreQuotaActive()) {
       try {
         const cloudSnap = await Promise.race([
           getDocs(collection(firestoreDb, 'users')),
@@ -1277,7 +1379,11 @@ async function startServer() {
           }
         }
       } catch (cloudLookupErr) {
-        console.warn('On-demand Firestore login lookup notice:', cloudLookupErr);
+        if (isFirestoreQuotaError(cloudLookupErr)) {
+          noteFirestoreQuotaHit('login lookup', cloudLookupErr);
+        } else {
+          console.warn('On-demand Firestore login lookup notice:', cloudLookupErr);
+        }
       }
     }
 
@@ -1337,8 +1443,7 @@ async function startServer() {
   });
 
   // 3. Departments: List, Add, Update, Delete
-  app.get('/api/departments', async (req: Request, res: Response) => {
-    await syncFromFirestoreIfNewer();
+  app.get('/api/departments', (req: Request, res: Response) => {
     // Augment with active member count
     const departmentsWithCount = db.departments.map((dept) => {
       const count = db.users.filter((u) => u.departmentId === dept.id && u.status === 'active').length;
@@ -1472,8 +1577,7 @@ async function startServer() {
   });
 
   // ================= WORK LOCATIONS MANAGEMENT (Admin กำหนดตำแหน่งได้เอง) =================
-  app.get('/api/locations', async (req: Request, res: Response) => {
-    await syncFromFirestoreIfNewer();
+  app.get('/api/locations', (req: Request, res: Response) => {
     res.json(db.locations);
   });
 
@@ -1627,15 +1731,13 @@ async function startServer() {
   });
 
   // 4. Users Management: List, Create, Update, Delete
-  app.get('/api/users', async (req: Request, res: Response) => {
-    await syncFromFirestoreIfNewer();
+  app.get('/api/users', (req: Request, res: Response) => {
     const safeUsers = db.users.map(({ password, ...u }) => u);
     res.json(safeUsers);
   });
 
   // Admin access to view users with passwords (for distributing account credentials to staff on various devices)
-  app.get('/api/admin/users-with-passwords', async (req: Request, res: Response) => {
-    await syncFromFirestoreIfNewer();
+  app.get('/api/admin/users-with-passwords', (req: Request, res: Response) => {
     res.json(db.users);
   });
 
@@ -1947,8 +2049,7 @@ async function startServer() {
   });
 
   // 5. Attendance Management: Check-In / Check-Out
-  app.get('/api/attendance', async (req: Request, res: Response) => {
-    await syncFromFirestoreIfNewer(true);
+  app.get('/api/attendance', (req: Request, res: Response) => {
     const { userId, departmentId, role, type, startDate, endDate } = req.query;
 
     let results = [...db.attendance];
@@ -1980,7 +2081,6 @@ async function startServer() {
 
   app.post('/api/attendance', async (req: Request, res: Response) => {
     try {
-      await syncFromFirestoreIfNewer();
       const {
         userId,
         type,
@@ -2533,8 +2633,7 @@ ${newRecord.note ? `📝 หมายเหตุ/ภารกิจ: ${newRecor
   });
 
   // 8. System Settings
-  app.get('/api/settings', async (req: Request, res: Response) => {
-    await syncFromFirestoreIfNewer();
+  app.get('/api/settings', (req: Request, res: Response) => {
     res.json(db.settings);
   });
 
