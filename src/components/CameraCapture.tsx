@@ -334,7 +334,13 @@ export const CameraCapture: React.FC<CameraCaptureProps> = ({
       curY += smallGap;
     }
 
-    const dataUrl = canvas.toDataURL('image/jpeg', 0.92);
+    let dataUrl = canvas.toDataURL('image/jpeg', 0.88);
+    if (dataUrl.length > 650000) {
+      dataUrl = canvas.toDataURL('image/jpeg', 0.76);
+    }
+    if (dataUrl.length > 650000) {
+      dataUrl = canvas.toDataURL('image/jpeg', 0.65);
+    }
 
     // Stop live stream after photo taken
     stopStream();

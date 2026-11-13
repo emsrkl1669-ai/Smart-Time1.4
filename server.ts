@@ -18,9 +18,11 @@ import {
   doc,
   setDoc,
   getDoc,
+  getDocFromServer,
   getDocs,
   collection,
   deleteDoc,
+  onSnapshot,
   Firestore,
 } from 'firebase/firestore';
 
@@ -40,14 +42,16 @@ try {
 }
 
 // Asynchronous Cloud Firestore Helpers
-async function firestoreSet(collectionName: string, docId: string, data: any) {
-  if (!firestoreDb) return;
+async function firestoreSet(collectionName: string, docId: string, data: any): Promise<boolean> {
+  if (!firestoreDb) return false;
   try {
     // Replace full document cleanly so cleared/emptied fields never resurrect from old merge data
     const cleanData = JSON.parse(JSON.stringify(data));
     await setDoc(doc(firestoreDb, collectionName, docId), cleanData);
+    return true;
   } catch (err) {
     console.warn(`Firestore write notice (${collectionName}/${docId}):`, err);
+    return false;
   }
 }
 
@@ -71,9 +75,12 @@ const ADMIN_JOURNAL_FILE = path.join(DATA_DIR, 'admin_edits_journal.jsonl');
 let lastBackupTimestamp = new Date().toISOString();
 let dbVersion = Date.now();
 let lastCloudMetaCheck = 0;
+let lastHandledCloudVersion = 0;
+let inFlightCloudSync: Promise<void> | null = null;
 
 async function firestoreUpdateSyncMeta() {
   dbVersion = Date.now();
+  lastHandledCloudVersion = dbVersion;
   if (!firestoreDb) return;
   await firestoreSet('_meta', 'sync', {
     version: dbVersion,
@@ -88,33 +95,48 @@ async function firestoreUpdateSyncMeta() {
   });
 }
 
-async function syncFromFirestoreIfNewer() {
+async function syncFromFirestoreIfNewer(force = false): Promise<void> {
   if (!firestoreDb) return;
+  if (inFlightCloudSync) {
+    return inFlightCloudSync;
+  }
   const now = Date.now();
-  if (now - lastCloudMetaCheck < 4000) return;
+  if (!force && now - lastCloudMetaCheck < 1000) return;
   lastCloudMetaCheck = now;
-  try {
-    const metaSnap = await Promise.race([
-      getDoc(doc(firestoreDb, '_meta', 'sync')),
-      new Promise<null>((resolve) => setTimeout(() => resolve(null), 3000)),
-    ]);
-    if (metaSnap && metaSnap.exists()) {
-      const meta = metaSnap.data() as any;
-      if (meta?.version && Number(meta.version) > dbVersion) {
-        const cloudData = await loadFromFirestore();
-        if (cloudData) {
-          if (cloudData.users && cloudData.users.length > 0) db.users = cloudData.users;
-          if (cloudData.departments && cloudData.departments.length > 0) db.departments = cloudData.departments;
-          if (cloudData.locations && cloudData.locations.length > 0) db.locations = cloudData.locations;
-          if (cloudData.attendance) db.attendance = cloudData.attendance;
-          if (cloudData.settings) db.settings = { ...db.settings, ...cloudData.settings };
-          saveDatabase(db);
-          rewriteAttendanceArchive(db.attendance);
-          dbVersion = Number(meta.version);
+
+  inFlightCloudSync = (async () => {
+    try {
+      const metaSnap = await Promise.race([
+        getDocFromServer(doc(firestoreDb!, '_meta', 'sync')),
+        new Promise<null>((resolve) => setTimeout(() => resolve(null), 5000)),
+      ]);
+      if (metaSnap && metaSnap.exists()) {
+        const meta = metaSnap.data() as any;
+        const remoteVer = Number(meta?.version || 0);
+        const isRemoteClientWrite = meta?.source === 'client-firestore' && remoteVer !== lastHandledCloudVersion;
+        if (remoteVer && (remoteVer > dbVersion || isRemoteClientWrite)) {
+          const cloudData = await loadFromFirestore();
+          if (cloudData) {
+            if (cloudData.users && cloudData.users.length > 0) db.users = cloudData.users;
+            if (cloudData.departments && cloudData.departments.length > 0) db.departments = cloudData.departments;
+            if (cloudData.locations && cloudData.locations.length > 0) db.locations = cloudData.locations;
+            if (cloudData.attendance) db.attendance = cloudData.attendance;
+            if (cloudData.settings) db.settings = { ...db.settings, ...cloudData.settings };
+            saveDatabase(db);
+            rewriteAttendanceArchive(db.attendance);
+            dbVersion = Math.max(Date.now(), remoteVer);
+            lastHandledCloudVersion = remoteVer;
+          }
         }
       }
-    }
-  } catch {}
+    } catch {}
+  })();
+
+  try {
+    await inFlightCloudSync;
+  } finally {
+    inFlightCloudSync = null;
+  }
 }
 
 interface AdminJournalEntry {
@@ -193,11 +215,6 @@ function appendToAttendanceArchive(record: AttendanceRecord) {
     }
     const line = JSON.stringify(record) + '\n';
     fs.appendFileSync(ATTENDANCE_ARCHIVE_FILE, line, 'utf-8');
-
-    // Mirror to Cloud Firestore immediately
-    if (firestoreDb && record.id) {
-      firestoreSet('attendance', record.id, record);
-    }
   } catch (err) {
     console.error('Failed to append to attendance archive:', err);
   }
@@ -1044,6 +1061,30 @@ async function startServer() {
     }
   } catch (cloudErr) {
     console.warn('Cloud Firestore startup sync notice:', cloudErr);
+  }
+
+  // Real-time Firestore listener on server so direct client/Vercel writes propagate immediately
+  if (firestoreDb) {
+    let initialMetaSeen = false;
+    onSnapshot(
+      doc(firestoreDb, '_meta', 'sync'),
+      (snap) => {
+        if (!initialMetaSeen) {
+          initialMetaSeen = true;
+          return;
+        }
+        if (snap.exists()) {
+          const meta = snap.data() as any;
+          const remoteVer = Number(meta?.version || 0);
+          if (remoteVer && remoteVer !== lastHandledCloudVersion) {
+            syncFromFirestoreIfNewer(true).catch(() => {});
+          }
+        }
+      },
+      (err) => {
+        console.warn('Server Firestore _meta/sync listener note:', err?.message || err);
+      }
+    );
   }
 
   // JSON Body parser (high limit for base64 photo capture)
@@ -1893,7 +1934,7 @@ async function startServer() {
 
   // 5. Attendance Management: Check-In / Check-Out
   app.get('/api/attendance', async (req: Request, res: Response) => {
-    await syncFromFirestoreIfNewer();
+    await syncFromFirestoreIfNewer(true);
     const { userId, departmentId, role, type, startDate, endDate } = req.query;
 
     let results = [...db.attendance];
@@ -1925,6 +1966,7 @@ async function startServer() {
 
   app.post('/api/attendance', async (req: Request, res: Response) => {
     try {
+      await syncFromFirestoreIfNewer();
       const {
         userId,
         type,
@@ -1944,7 +1986,18 @@ async function startServer() {
         return;
       }
 
-      const user = db.users.find((u) => u.id === userId);
+      let user = db.users.find((u) => u.id === userId);
+      if (!user && firestoreDb) {
+        try {
+          const userSnap = await getDoc(doc(firestoreDb, 'users', String(userId)));
+          if (userSnap.exists()) {
+            user = userSnap.data() as User;
+            if (!db.users.some((u) => u.id === user!.id)) {
+              db.users.push(user);
+            }
+          }
+        } catch {}
+      }
       if (!user) {
         res.status(404).json({ error: 'ไม่พบผู้ใช้งานนี้ในระบบ' });
         return;
@@ -2078,9 +2131,15 @@ ${newRecord.note ? `📝 หมายเหตุ/ภารกิจ: ${newRecor
       saveDatabase(db);
       appendToAttendanceArchive(newRecord);
 
+      const firestoreSynced = await firestoreSet('attendance', newRecord.id, newRecord);
+      if (firestoreSynced) {
+        await firestoreUpdateSyncMeta();
+      }
+
       res.status(201).json({
         message: 'บันทึกเวลาเรียบร้อยแล้ว',
         record: newRecord,
+        firestoreSynced,
         lineNotification: lineResult,
       });
     } catch (err: any) {
@@ -2092,6 +2151,7 @@ ${newRecord.note ? `📝 หมายเหตุ/ภารกิจ: ${newRecor
   // 6. Batch sync offline records
   app.post('/api/attendance/sync', async (req: Request, res: Response) => {
     try {
+      await syncFromFirestoreIfNewer();
       const { records } = req.body;
       if (!Array.isArray(records) || records.length === 0) {
         res.status(400).json({ error: 'ไม่มีข้อมูลที่ต้องซิงค์' });
@@ -2099,6 +2159,7 @@ ${newRecord.note ? `📝 หมายเหตุ/ภารกิจ: ${newRecor
       }
 
       const savedRecords: AttendanceRecord[] = [];
+      let allFirestoreSynced = true;
 
       for (const rec of records) {
         const exists = db.attendance.some((existing) => existing.id === rec.id);
@@ -2139,12 +2200,18 @@ ${newRecord.note ? `📝 หมายเหตุ/ภารกิจ: ${newRecor
         db.attendance.unshift(newRec);
         savedRecords.push(newRec);
         appendToAttendanceArchive(newRec);
+        const ok = await firestoreSet('attendance', newRec.id, newRec);
+        if (!ok) allFirestoreSynced = false;
       }
 
       saveDatabase(db);
+      if (savedRecords.length > 0 && allFirestoreSynced) {
+        await firestoreUpdateSyncMeta();
+      }
       res.json({
         message: `ซิงค์ข้อมูลสำเร็จ ${savedRecords.length} รายการ`,
         syncedCount: savedRecords.length,
+        firestoreSynced: allFirestoreSynced,
         records: savedRecords,
       });
     } catch (err: any) {

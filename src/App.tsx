@@ -6,7 +6,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { User, Department, AttendanceRecord, SystemSettings, WorkLocation } from './types';
 import { api, getOfflineQueue, isOnline, subscribeToLocalMutations } from './services/api';
-import { testFirestoreConnection } from './services/firebase';
+import { testFirestoreConnection, subscribeToFirestoreRealtimeSync } from './services/firebase';
 import { LoginModal } from './components/LoginModal';
 import { Navbar, DeviceMode } from './components/Navbar';
 import { CheckInCard } from './components/CheckInCard';
@@ -144,6 +144,11 @@ export default function App() {
       loadAllData();
     });
 
+    // Real-time Cloud Firestore subscription (updates immediately across smart-sime14.vercel.app & all devices)
+    const unsubscribeRealtime = subscribeToFirestoreRealtimeSync(() => {
+      loadAllData();
+    });
+
     const handleVisibilityOrFocus = () => {
       if (isOnline()) {
         pollSync();
@@ -177,6 +182,7 @@ export default function App() {
       clearInterval(clockTimer);
       clearInterval(dbPollTimer);
       unsubscribeMutations();
+      unsubscribeRealtime();
       document.removeEventListener('visibilitychange', handleVisibilityOrFocus);
       window.removeEventListener('focus', handleVisibilityOrFocus);
       window.removeEventListener('pageshow', handleVisibilityOrFocus);

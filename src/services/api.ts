@@ -21,6 +21,11 @@ import {
   deleteAttendanceFromFirestore,
   cleanDemoAttendanceInFirestore,
   updateSettingsInFirestore,
+  ensureFirestoreSafePhoto,
+  saveAttendanceRecordToFirestore,
+  createAttendanceInFirestore,
+  syncAttendanceBatchToFirestore,
+  getSyncMetaFromFirestore,
 } from './firebase';
 
 const STORAGE_KEYS = {
@@ -809,6 +814,9 @@ export const api = {
     const cachedUsers = getCache<User[]>(STORAGE_KEYS.CACHED_USERS) || [];
     const targetUser = cachedUsers.find((u) => u.id === payload.userId) || (user?.id === payload.userId ? user : null);
 
+    const safePhoto = await ensureFirestoreSafePhoto(payload.photo);
+    const normalizedPayload = { ...payload, photo: safePhoto };
+
     const now = payload.customTimestamp ? new Date(payload.customTimestamp) : new Date();
     const thai = getThaiDateTime(now);
     const dateStr = thai.dateStr;
@@ -826,6 +834,75 @@ export const api = {
       }
     }
 
+    const prependToCache = (rec: AttendanceRecord) => {
+      const existing = getCache<AttendanceRecord[]>(STORAGE_KEYS.CACHED_ATTENDANCE) || [];
+      const deduped = existing.filter((r) => r.id !== rec.id);
+      setCache(STORAGE_KEYS.CACHED_ATTENDANCE, [rec, ...deduped]);
+    };
+
+    if (isOnline()) {
+      let validationErrorMsg: string | null = null;
+
+      try {
+        const res = await freshFetch('/api/attendance', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(normalizedPayload),
+        });
+
+        const contentType = res.headers.get('content-type') || '';
+        const isJson = contentType.includes('application/json');
+
+        if (res.ok && isJson) {
+          const data = await res.json();
+          if (data?.record) {
+            if (!data.firestoreSynced) {
+              try {
+                await saveAttendanceRecordToFirestore(data.record);
+              } catch (fbMirrorErr) {
+                console.warn('Firestore mirror fallback note:', fbMirrorErr);
+              }
+            }
+            prependToCache(data.record);
+            notifyLocalMutation('attendance_updated', data.record);
+            return {
+              record: data.record,
+              offline: false,
+              message: 'บันทึกเวลาเข้าสู่ระบบ Smart Time Attendance (https://smart-sime14.vercel.app/) สำเร็จทันที',
+            };
+          }
+        } else if (isJson && res.status === 400) {
+          const err = await res.json().catch(() => ({}));
+          validationErrorMsg = err.error || 'ข้อมูลไม่ครบถ้วน';
+        }
+      } catch (e) {
+        console.warn('Backend /api/attendance unavailable, writing directly to Cloud Firestore');
+      }
+
+      if (validationErrorMsg) {
+        throw new Error(validationErrorMsg);
+      }
+
+      // Direct Cloud Firestore Write (primary path on static Vercel host & fallback when /api/* unavailable)
+      try {
+        const fbRecord = await createAttendanceInFirestore(normalizedPayload);
+        prependToCache(fbRecord);
+        notifyLocalMutation('attendance_updated', fbRecord);
+        return {
+          record: fbRecord,
+          offline: false,
+          message: 'บันทึกเวลาเข้าสู่ระบบ Cloud Smart Time Attendance (https://smart-sime14.vercel.app/) สำเร็จทันที',
+        };
+      } catch (fbErr: any) {
+        const msg = String(fbErr?.message || '');
+        if (msg.includes('ไม่พบผู้ใช้งานนี้ในระบบ')) {
+          throw new Error(msg);
+        }
+        console.warn('Direct Cloud Firestore write failed, storing offline queue:', msg);
+      }
+    }
+
+    // Save offline ONLY when truly disconnected from both backend & Cloud Firestore
     const tempRecord: AttendanceRecord = {
       id: `att_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
       userId: payload.userId,
@@ -837,7 +914,7 @@ export const api = {
       timestamp: now.toISOString(),
       date: dateStr,
       time: timeStr,
-      photo: payload.photo,
+      photo: safePhoto,
       latitude: payload.latitude,
       longitude: payload.longitude,
       accuracy: payload.accuracy,
@@ -845,41 +922,17 @@ export const api = {
       workLocationId: payload.workLocationId,
       deviceOs,
       note: payload.note,
-      isOfflineRecord: !isOnline(),
+      isOfflineRecord: true,
       lineNotificationStatus: 'simulated',
     };
 
-    if (isOnline()) {
-      try {
-        const res = await freshFetch('/api/attendance', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload),
-        });
-
-        if (res.ok) {
-          const data = await res.json();
-          notifyLocalMutation('attendance_updated', data.record);
-          return {
-            record: data.record,
-            offline: false,
-            message: 'บันทึกเวลาสำเร็จ พร้อมส่งการแจ้งเตือนเรียบร้อยแล้ว',
-          };
-        }
-      } catch (e) {
-        console.warn('Online submission failed, storing offline');
-      }
-    }
-
-    // Save offline
-    tempRecord.isOfflineRecord = true;
     addToOfflineQueue(tempRecord);
     notifyLocalMutation('attendance_updated', tempRecord);
 
     return {
       record: tempRecord,
       offline: true,
-      message: 'บันทึกเวลาแบบออฟไลน์สำเร็จ (ข้อมูลถูกเก็บในอุปกรณ์ จะซิงค์เข้าสู่ระบบและแจ้ง LINE เมื่อต่อเน็ต)',
+      message: 'บันทึกเวลาแบบออฟไลน์สำเร็จ (ข้อมูลถูกเก็บในอุปกรณ์ จะซิงค์เข้าสู่ระบบทันทีเมื่อต่อเน็ต)',
     };
   },
 
@@ -893,18 +946,46 @@ export const api = {
       throw new Error('ไม่สามารถซิงค์ได้เนื่องจากยังไม่มีการเชื่อมต่ออินเทอร์เน็ต');
     }
 
-    const res = await freshFetch('/api/attendance/sync', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ records: queue }),
-    });
+    let syncedCount = 0;
+    let handledViaBackend = false;
 
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      throw new Error(err.error || 'ซิงค์ข้อมูลไม่สำเร็จ');
+    try {
+      const res = await freshFetch('/api/attendance/sync', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ records: queue }),
+      });
+
+      const contentType = res.headers.get('content-type') || '';
+      const isJson = contentType.includes('application/json');
+
+      if (res.ok && isJson) {
+        const data = await res.json();
+        syncedCount = data.syncedCount ?? queue.length;
+        if (!data.firestoreSynced) {
+          try {
+            await syncAttendanceBatchToFirestore(data.records || queue);
+          } catch (fbErr) {
+            console.warn('Firestore batch mirror notice:', fbErr);
+          }
+        }
+        handledViaBackend = true;
+      } else if (isJson && res.status === 400) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error || 'ซิงค์ข้อมูลไม่สำเร็จ');
+      }
+    } catch (e: any) {
+      if (e?.message && !e.message.includes('HTTP') && !e.message.includes('fetch') && !e.message.includes('Network') && e.message !== 'ซิงค์ข้อมูลไม่สำเร็จ') {
+        throw e;
+      }
+      console.warn('Backend /api/attendance/sync unavailable, syncing directly to Cloud Firestore');
     }
 
-    const data = await res.json();
+    if (!handledViaBackend) {
+      const fbSaved = await syncAttendanceBatchToFirestore(queue);
+      syncedCount = fbSaved.length || queue.length;
+    }
+
     // Safely remove only the synced items from the offline queue to prevent losing new entries
     const syncedIds = new Set(queue.map((r) => r.id));
     const currentQueue = getOfflineQueue();
@@ -913,8 +994,8 @@ export const api = {
 
     notifyLocalMutation('attendance_updated');
     return {
-      syncedCount: data.syncedCount || queue.length,
-      message: `ซิงค์ข้อมูลเข้าสู่ฐานข้อมูลกลางสำเร็จ ${data.syncedCount || queue.length} รายการแล้ว`,
+      syncedCount,
+      message: `ซิงค์ข้อมูลเข้าสู่ฐานข้อมูลกลาง Smart Time สำเร็จ ${syncedCount} รายการแล้ว`,
     };
   },
 
@@ -1231,13 +1312,14 @@ export const api = {
     if (!isOnline()) return null;
     try {
       const res = await freshFetch('/api/sync-check');
-      if (res.ok) {
+      const contentType = res.headers.get('content-type') || '';
+      if (res.ok && contentType.includes('application/json')) {
         return await res.json();
       }
     } catch {
-      // offline or silent
+      // fallback to Cloud Firestore
     }
-    return null;
+    return await getSyncMetaFromFirestore();
   },
 
   // Firebase Cloud Firestore Status & Full Sync

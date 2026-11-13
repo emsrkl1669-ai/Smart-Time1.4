@@ -8,9 +8,11 @@ import {
   setDoc,
   deleteDoc,
   collection,
+  onSnapshot,
   Firestore,
 } from 'firebase/firestore';
 import firebaseConfig from '../../firebase-applet-config.json';
+import { getThaiDateTime } from '../utils/thaiTime';
 import {
   User,
   Department,
@@ -953,6 +955,354 @@ export async function updateSettingsInFirestore(
   } catch (err) {
     return handleFirestoreError(err, OperationType.WRITE, path);
   }
+}
+
+// =========================================================================
+// Direct Cloud Firestore Attendance Check-In / Check-Out & Real-Time Sync
+// Guarantees photos stay under Firestore's 1 MiB document limit and records
+// sync immediately across smart-sime14.vercel.app and all user devices.
+// =========================================================================
+
+export async function ensureFirestoreSafePhoto(
+  photoDataUrl: string,
+  maxChars: number = 650000
+): Promise<string> {
+  if (!photoDataUrl || typeof photoDataUrl !== 'string') return '';
+  if (photoDataUrl.length <= maxChars) return photoDataUrl;
+  if (typeof document === 'undefined' || typeof Image === 'undefined') {
+    return photoDataUrl;
+  }
+
+  return new Promise((resolve) => {
+    try {
+      const img = new Image();
+      img.onload = () => {
+        try {
+          const maxDim = 1440;
+          let width = img.naturalWidth || img.width || 1280;
+          let height = img.naturalHeight || img.height || 720;
+          if (width > maxDim || height > maxDim) {
+            const ratio = Math.min(maxDim / width, maxDim / height);
+            width = Math.max(1, Math.round(width * ratio));
+            height = Math.max(1, Math.round(height * ratio));
+          }
+
+          const canvas = document.createElement('canvas');
+          canvas.width = width;
+          canvas.height = height;
+          const ctx = canvas.getContext('2d');
+          if (!ctx) {
+            resolve(photoDataUrl);
+            return;
+          }
+          ctx.drawImage(img, 0, 0, width, height);
+
+          let result = canvas.toDataURL('image/jpeg', 0.82);
+          if (result.length > maxChars) {
+            result = canvas.toDataURL('image/jpeg', 0.68);
+          }
+          if (result.length > maxChars) {
+            result = canvas.toDataURL('image/jpeg', 0.55);
+          }
+          resolve(result);
+        } catch {
+          resolve(photoDataUrl);
+        }
+      };
+      img.onerror = () => resolve(photoDataUrl);
+      img.src = photoDataUrl;
+    } catch {
+      resolve(photoDataUrl);
+    }
+  });
+}
+
+export async function saveAttendanceRecordToFirestore(
+  record: AttendanceRecord
+): Promise<AttendanceRecord> {
+  const path = `attendance/${record.id}`;
+  try {
+    const safePhoto = await ensureFirestoreSafePhoto(record.photo);
+    const cleanRecord: AttendanceRecord = sanitizeForFirestore({
+      ...record,
+      photo: safePhoto,
+    });
+    await withTimeout(setDoc(doc(db, 'attendance', cleanRecord.id), cleanRecord), 10000);
+    await bumpFirestoreSyncMeta();
+    return cleanRecord;
+  } catch (err) {
+    return handleFirestoreError(err, OperationType.WRITE, path);
+  }
+}
+
+export async function createAttendanceInFirestore(payload: {
+  userId: string;
+  type: 'check_in' | 'check_out';
+  photo: string;
+  latitude: number;
+  longitude: number;
+  accuracy?: number;
+  locationName: string;
+  workLocationId?: string;
+  note?: string;
+  customTimestamp?: string;
+}): Promise<AttendanceRecord> {
+  const path = 'attendance';
+  try {
+    let targetUser: User | null = null;
+    try {
+      const userSnap = await withTimeout(getDoc(doc(db, 'users', String(payload.userId))), 6000);
+      if (userSnap.exists()) {
+        targetUser = userSnap.data() as User;
+      }
+    } catch {
+      // fall through to collection / cache lookup
+    }
+
+    if (!targetUser) {
+      try {
+        const usersSnap = await withTimeout(getDocs(collection(db, 'users')), 7000);
+        usersSnap.forEach((d) => {
+          const u = d.data() as User;
+          if (u.id === payload.userId) targetUser = u;
+        });
+      } catch {
+        // ignore
+      }
+    }
+
+    if (!targetUser && typeof localStorage !== 'undefined') {
+      try {
+        const cachedRaw = localStorage.getItem('smart_attendance_cached_users');
+        if (cachedRaw) {
+          const parsed: User[] = JSON.parse(cachedRaw);
+          targetUser = parsed.find((u) => u.id === payload.userId) || null;
+        }
+        if (!targetUser) {
+          const curRaw = localStorage.getItem('smart_attendance_current_user');
+          if (curRaw) {
+            const cur = JSON.parse(curRaw) as User;
+            if (cur?.id === payload.userId) targetUser = cur;
+          }
+        }
+      } catch {
+        // ignore
+      }
+    }
+
+    if (!targetUser) {
+      throw new Error('ไม่พบผู้ใช้งานนี้ในระบบ');
+    }
+
+    const locs = (await getLocationsFromFirestore()) || [];
+    const now = payload.customTimestamp ? new Date(payload.customTimestamp) : new Date();
+    const thai = getThaiDateTime(now);
+    const recordLat = Number(payload.latitude) || 13.7563;
+    const recordLon = Number(payload.longitude) || 100.5018;
+
+    let matchedLoc: WorkLocation | undefined;
+    if (payload.workLocationId) {
+      matchedLoc = locs.find((l) => l.id === payload.workLocationId);
+    } else if (targetUser.assignedLocationId) {
+      matchedLoc = locs.find((l) => l.id === targetUser!.assignedLocationId);
+    }
+
+    if (!matchedLoc && locs.length > 0) {
+      let minDist = Infinity;
+      locs.forEach((loc) => {
+        if (!loc.isActive) return;
+        const d = calculateDistanceMetersLocal(recordLat, recordLon, loc.latitude, loc.longitude);
+        if (d < minDist) {
+          minDist = d;
+          matchedLoc = loc;
+        }
+      });
+    }
+
+    let calculatedDistance: number | undefined;
+    let isWithinGeofence = false;
+    if (matchedLoc) {
+      calculatedDistance = calculateDistanceMetersLocal(
+        recordLat,
+        recordLon,
+        matchedLoc.latitude,
+        matchedLoc.longitude
+      );
+      isWithinGeofence = calculatedDistance <= (matchedLoc.radiusMeters || 200);
+    }
+
+    let deviceOs: 'ios' | 'android' | 'desktop' | 'unknown' = 'desktop';
+    if (typeof navigator !== 'undefined') {
+      if (/iPhone|iPad|iPod/i.test(navigator.userAgent)) {
+        deviceOs = 'ios';
+      } else if (/Android/i.test(navigator.userAgent)) {
+        deviceOs = 'android';
+      }
+    }
+
+    const safePhoto = await ensureFirestoreSafePhoto(payload.photo);
+    const recordId = `att_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
+
+    const newRecord: AttendanceRecord = sanitizeForFirestore({
+      id: recordId,
+      userId: targetUser.id,
+      userName: targetUser.fullName,
+      userRole: targetUser.role,
+      departmentId: targetUser.departmentId,
+      departmentName: targetUser.departmentName,
+      type: payload.type === 'check_out' ? 'check_out' : 'check_in',
+      timestamp: now.toISOString(),
+      date: thai.dateStr,
+      time: thai.timeStr,
+      photo: safePhoto,
+      latitude: recordLat,
+      longitude: recordLon,
+      accuracy: payload.accuracy ? Number(payload.accuracy) : undefined,
+      locationName: payload.locationName || (matchedLoc ? matchedLoc.name : 'พิกัด GPS ที่ระบุ'),
+      workLocationId: matchedLoc?.id,
+      workLocationName: matchedLoc?.name,
+      isWithinGeofence,
+      distanceFromLocationMeters: calculatedDistance,
+      deviceOs,
+      note: payload.note ? String(payload.note).trim() : '',
+      isOfflineRecord: false,
+      lineNotificationStatus: 'simulated',
+      lineTargetDepartment: targetUser.departmentName,
+    });
+
+    await withTimeout(setDoc(doc(db, 'attendance', recordId), newRecord), 10000);
+    await bumpFirestoreSyncMeta();
+    return newRecord;
+  } catch (err) {
+    if (err instanceof Error && err.message.includes('ไม่พบผู้ใช้งานนี้ในระบบ')) {
+      throw err;
+    }
+    return handleFirestoreError(err, OperationType.CREATE, path);
+  }
+}
+
+export async function syncAttendanceBatchToFirestore(
+  records: AttendanceRecord[]
+): Promise<AttendanceRecord[]> {
+  if (!Array.isArray(records) || records.length === 0) return [];
+  const path = 'attendance/batch';
+  try {
+    const usersSnap = await withTimeout(getDocs(collection(db, 'users')), 7000).catch(() => null);
+    const userMap = new Map<string, User>();
+    if (usersSnap) {
+      usersSnap.forEach((d) => {
+        const u = d.data() as User;
+        userMap.set(u.id, u);
+      });
+    }
+
+    const savedRecords: AttendanceRecord[] = [];
+    for (const rec of records) {
+      const recordId = rec.id || `att_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
+      const existingSnap = await withTimeout(getDoc(doc(db, 'attendance', recordId)), 6000).catch(() => null);
+      if (existingSnap && existingSnap.exists()) {
+        savedRecords.push(existingSnap.data() as AttendanceRecord);
+        continue;
+      }
+
+      const user = userMap.get(rec.userId);
+      const safePhoto = await ensureFirestoreSafePhoto(rec.photo);
+      const cleanRec: AttendanceRecord = sanitizeForFirestore({
+        ...rec,
+        id: recordId,
+        userName: user?.fullName || rec.userName,
+        userRole: user?.role || rec.userRole || 'employee',
+        departmentId: user?.departmentId || rec.departmentId,
+        departmentName: user?.departmentName || rec.departmentName,
+        photo: safePhoto,
+        isOfflineRecord: true,
+        syncedAt: new Date().toISOString(),
+        lineNotificationStatus: rec.lineNotificationStatus || 'simulated',
+      });
+
+      await withTimeout(setDoc(doc(db, 'attendance', recordId), cleanRec), 10000);
+      savedRecords.push(cleanRec);
+    }
+
+    if (savedRecords.length > 0) {
+      await bumpFirestoreSyncMeta();
+    }
+    return savedRecords;
+  } catch (err) {
+    return handleFirestoreError(err, OperationType.WRITE, path);
+  }
+}
+
+export async function getSyncMetaFromFirestore(): Promise<{
+  version: number;
+  lastModified: string;
+  counts: { users: number; locations: number; departments: number; attendance: number };
+  serverTime: string;
+  timestamp: number;
+} | null> {
+  try {
+    const snap = await withTimeout(getDoc(doc(db, '_meta', 'sync')), 5000);
+    if (!snap.exists()) return null;
+    const data = snap.data() as any;
+    const version = Number(data?.version || 0);
+    if (!version) return null;
+    return {
+      version,
+      lastModified: String(data?.lastModified || new Date().toISOString()),
+      counts: data?.counts || { users: 0, locations: 0, departments: 0, attendance: 0 },
+      serverTime: new Date().toISOString(),
+      timestamp: Date.now(),
+    };
+  } catch {
+    return null;
+  }
+}
+
+export function subscribeToFirestoreRealtimeSync(onChange: () => void): () => void {
+  let metaInitialized = false;
+  let attendanceInitialized = false;
+  let debounceTimer: ReturnType<typeof setTimeout> | null = null;
+
+  const triggerReload = () => {
+    if (debounceTimer) clearTimeout(debounceTimer);
+    debounceTimer = setTimeout(() => {
+      onChange();
+    }, 250);
+  };
+
+  const unsubMeta = onSnapshot(
+    doc(db, '_meta', 'sync'),
+    () => {
+      if (!metaInitialized) {
+        metaInitialized = true;
+        return;
+      }
+      triggerReload();
+    },
+    (err) => {
+      console.warn('Firestore _meta/sync realtime listener warning:', err?.message || err);
+    }
+  );
+
+  const unsubAttendance = onSnapshot(
+    collection(db, 'attendance'),
+    () => {
+      if (!attendanceInitialized) {
+        attendanceInitialized = true;
+        return;
+      }
+      triggerReload();
+    },
+    (err) => {
+      console.warn('Firestore attendance realtime listener warning:', err?.message || err);
+    }
+  );
+
+  return () => {
+    if (debounceTimer) clearTimeout(debounceTimer);
+    unsubMeta();
+    unsubAttendance();
+  };
 }
 
 export { firebaseConfig };
