@@ -26,6 +26,8 @@ import {
   createAttendanceInFirestore,
   syncAttendanceBatchToFirestore,
   getSyncMetaFromFirestore,
+  isFirestoreQuotaLimited,
+  markClientQuotaLimited,
 } from './firebase';
 
 const STORAGE_KEYS = {
@@ -201,7 +203,7 @@ export function subscribeToLocalMutations(callback: (type: string, payload: any)
 }
 
 // Anti-cache fresh fetch: forces browser to bypass disk/memory cache and always contact the server
-export async function freshFetch(url: string, init?: RequestInit): Promise<Response> {
+export async function freshFetch(url: string, init?: RequestInit, timeoutMs: number = 15000): Promise<Response> {
   const separator = url.includes('?') ? '&' : '?';
   const freshUrl = `${url}${separator}_t=${Date.now()}`;
   const headers = new Headers(init?.headers);
@@ -209,10 +211,16 @@ export async function freshFetch(url: string, init?: RequestInit): Promise<Respo
   headers.set('Pragma', 'no-cache');
   headers.set('Expires', '0');
 
+  const controller = !init?.signal && typeof AbortController !== 'undefined' ? new AbortController() : null;
+  const timer = controller ? setTimeout(() => controller.abort(), timeoutMs) : null;
+
   return fetch(freshUrl, {
     ...init,
     cache: 'no-store',
     headers,
+    signal: init?.signal || controller?.signal,
+  }).finally(() => {
+    if (timer) clearTimeout(timer);
   });
 }
 
@@ -326,7 +334,7 @@ export const api = {
   // Auth: Login with remember device option + Cloud Firestore & cross-browser fallback
   async login(username: string, password: string, rememberDevice: boolean = true): Promise<AuthResponse> {
     const normalizeText = (val: string) => {
-      const cleaned = String(val || '').replace(/[\u200B-\u200D\uFEFF]/g, '').trim();
+      const cleaned = String(val || '').replace(/[\u200B-\u200D\uFEFF\u00A0]/g, '').trim();
       try {
         return cleaned.normalize('NFC');
       } catch {
@@ -347,41 +355,52 @@ export const api = {
     let serverAuthRejectedMsg: string | null = null;
 
     if (isOnline()) {
-      try {
-        const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
-        const timer = controller ? setTimeout(() => controller.abort(), 3500) : null;
-        const res = await fetch('/api/auth/login', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-cache' },
-          body: JSON.stringify({ username: cleanIdentifier, password: cleanPassword }),
-          signal: controller?.signal,
-        }).finally(() => {
-          if (timer) clearTimeout(timer);
-        });
+      for (let attempt = 0; attempt < 2; attempt++) {
+        try {
+          const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+          const timer = controller ? setTimeout(() => controller.abort(), 15000) : null;
+          const res = await fetch('/api/auth/login', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-cache' },
+            body: JSON.stringify({ username: cleanIdentifier, password: cleanPassword }),
+            signal: controller?.signal,
+          }).finally(() => {
+            if (timer) clearTimeout(timer);
+          });
 
-        const contentType = res.headers.get('content-type') || '';
-        const isJson = contentType.includes('application/json');
+          const contentType = res.headers.get('content-type') || '';
+          const isJson = contentType.includes('application/json');
 
-        if (res.ok && isJson) {
-          const data: AuthResponse = await res.json();
-          if (data && data.user) {
-            return this._completeClientLogin(data);
+          if (res.ok && isJson) {
+            const data: AuthResponse = await res.json();
+            if (data && data.user) {
+              return this._completeClientLogin(data);
+            }
           }
-        }
 
-        if (isJson && (res.status === 400 || res.status === 401 || res.status === 403)) {
-          const err = await res.json().catch(() => ({}));
-          if (res.status === 403) {
-            throw new Error(err.error || 'บัญชีผู้ใช้นี้ถูกระงับการใช้งาน กรุณาติดต่อผู้ดูแลระบบ');
+          if (isJson && (res.status === 400 || res.status === 401 || res.status === 403)) {
+            const err = await res.json().catch(() => ({}));
+            if (res.status === 403) {
+              throw new Error(err.error || 'บัญชีผู้ใช้นี้ถูกระงับการใช้งาน กรุณาติดต่อผู้ดูแลระบบ');
+            }
+            serverAuthRejectedMsg = err.error || 'ชื่อผู้ใช้งานหรือรหัสผ่านไม่ถูกต้อง';
+            break;
           }
-          serverAuthRejectedMsg = err.error || 'ชื่อผู้ใช้งานหรือรหัสผ่านไม่ถูกต้อง';
+        } catch (err: any) {
+          // Explicit 403 error should stop immediately
+          if (err?.message && err.message.includes('ถูกระงับการใช้งาน')) {
+            throw err;
+          }
+          if (attempt === 0) {
+            await new Promise((r) => setTimeout(r, 300));
+            continue;
+          }
+          console.warn('Backend /api/auth/login unavailable, switching to Cloud Firestore auth:', err?.message);
         }
-      } catch (err: any) {
-        // Explicit 403 error should stop immediately
-        if (err?.message && err.message.includes('ถูกระงับการใช้งาน')) {
-          throw err;
-        }
-        console.warn('Backend /api/auth/login unavailable, switching to Cloud Firestore auth:', err?.message);
+      }
+
+      if (serverAuthRejectedMsg && isFirestoreQuotaLimited()) {
+        throw new Error(serverAuthRejectedMsg);
       }
 
       // Direct Cloud Firestore Fallback / Cross-Verification
@@ -886,21 +905,41 @@ export const api = {
 
     if (isOnline()) {
       let validationErrorMsg: string | null = null;
+      const apiPayload = {
+        ...normalizedPayload,
+        userSnapshot: targetUser
+          ? {
+              id: targetUser.id,
+              username: targetUser.username,
+              fullName: targetUser.fullName,
+              role: targetUser.role,
+              departmentId: targetUser.departmentId,
+              departmentName: targetUser.departmentName,
+            }
+          : undefined,
+      };
 
       try {
-        const res = await freshFetch('/api/attendance', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(normalizedPayload),
-        });
+        const res = await freshFetch(
+          '/api/attendance',
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(apiPayload),
+          },
+          20000
+        );
 
         const contentType = res.headers.get('content-type') || '';
         const isJson = contentType.includes('application/json');
 
         if (res.ok && isJson) {
           const data = await res.json();
+          if (data?.quotaLimited) {
+            markClientQuotaLimited();
+          }
           if (data?.record) {
-            if (!data.firestoreSynced) {
+            if (!data.firestoreSynced && !data.quotaLimited && !isFirestoreQuotaLimited()) {
               try {
                 await saveAttendanceRecordToFirestore(data.record);
               } catch (fbMirrorErr) {
@@ -1005,8 +1044,11 @@ export const api = {
 
       if (res.ok && isJson) {
         const data = await res.json();
+        if (data?.quotaLimited) {
+          markClientQuotaLimited();
+        }
         syncedCount = data.syncedCount ?? queue.length;
-        if (!data.firestoreSynced) {
+        if (!data.firestoreSynced && !data.quotaLimited && !isFirestoreQuotaLimited()) {
           try {
             await syncAttendanceBatchToFirestore(data.records || queue);
           } catch (fbErr) {

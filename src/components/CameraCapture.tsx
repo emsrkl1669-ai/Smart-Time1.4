@@ -92,7 +92,9 @@ export const CameraCapture: React.FC<CameraCaptureProps> = ({
 }) => {
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const nativeCameraInputRef = useRef<HTMLInputElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
+  const readyPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const isMountedRef = useRef(true);
 
   const [cameraError, setCameraError] = useState<string | null>(null);
@@ -100,9 +102,18 @@ export const CameraCapture: React.FC<CameraCaptureProps> = ({
   const [isInitializing, setIsInitializing] = useState(false);
   const [flashEffect, setFlashEffect] = useState(false);
   const [isLiveReady, setIsLiveReady] = useState(false);
+  const [needsTapToPlay, setNeedsTapToPlay] = useState(false);
+
+  const clearReadyPoll = useCallback(() => {
+    if (readyPollRef.current) {
+      clearInterval(readyPollRef.current);
+      readyPollRef.current = null;
+    }
+  }, []);
 
   // Stop camera stream safely using ref (prevents Android NotReadableError on camera switch/retake)
   const stopStream = useCallback(() => {
+    clearReadyPoll();
     const activeStream = streamRef.current;
     if (activeStream) {
       activeStream.getTracks().forEach((track) => {
@@ -121,7 +132,7 @@ export const CameraCapture: React.FC<CameraCaptureProps> = ({
         // ignore
       }
     }
-  }, []);
+  }, [clearReadyPoll]);
 
   // Polyfill-safe getUserMedia helper across iOS Safari (all versions), Android Chrome, Samsung Internet, and In-App Browsers
   const requestCameraStreamWithFallbacks = async (
@@ -195,15 +206,30 @@ export const CameraCapture: React.FC<CameraCaptureProps> = ({
 
   // Start Live Portrait Camera stream
   const startCamera = useCallback(async () => {
+    const hadActiveStream = Boolean(streamRef.current);
     setIsInitializing(true);
     setCameraError(null);
     setIsLiveReady(false);
+    setNeedsTapToPlay(false);
     stopStream();
 
-    if (typeof window !== 'undefined' && !window.isSecureContext && window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1') {
-      setCameraError('เบราว์เซอร์บนมือถือต้องเปิดผ่าน HTTPS จึงจะอนุญาตให้ใช้กล้องได้ กรุณาเปิดผ่านลิงก์ HTTPS ของระบบ');
+    if (
+      typeof window !== 'undefined' &&
+      !window.isSecureContext &&
+      window.location.hostname !== 'localhost' &&
+      window.location.hostname !== '127.0.0.1'
+    ) {
+      setCameraError(
+        'เบราว์เซอร์บนมือถือจำกัดกล้องสดบนการเชื่อมต่อที่ไม่ใช่ HTTPS สามารถกดปุ่ม "ถ่ายภาพผ่านกล้องมือถือโดยตรง" ด้านล่างได้ทันที'
+      );
       setIsInitializing(false);
       return;
+    }
+
+    // Brief pause when switching sensors so Android camera HAL releases hardware cleanly
+    if (hadActiveStream) {
+      await new Promise((r) => setTimeout(r, 150));
+      if (!isMountedRef.current) return;
     }
 
     try {
@@ -211,7 +237,9 @@ export const CameraCapture: React.FC<CameraCaptureProps> = ({
 
       if (!isMountedRef.current) {
         mediaStream.getTracks().forEach((t) => {
-          try { t.stop(); } catch {}
+          try {
+            t.stop();
+          } catch {}
         });
         return;
       }
@@ -226,51 +254,89 @@ export const CameraCapture: React.FC<CameraCaptureProps> = ({
         video.muted = true;
         video.srcObject = mediaStream;
 
-        const markReadyAndPlay = () => {
-          if (!isMountedRef.current) return;
+        const checkDimensions = () => {
+          if (!isMountedRef.current) return false;
           if (video.videoWidth > 0 && video.videoHeight > 0) {
             setIsLiveReady(true);
+            setNeedsTapToPlay(false);
+            clearReadyPoll();
+            return true;
           }
+          return false;
+        };
+
+        const markReadyAndPlay = () => {
+          if (!isMountedRef.current) return;
+          checkDimensions();
           const playPromise = video.play?.();
-          if (playPromise && typeof playPromise.catch === 'function') {
-            playPromise.catch((err) => {
-              console.warn('Video auto-play notice:', err);
-            });
+          if (playPromise && typeof playPromise.then === 'function') {
+            playPromise
+              .then(() => {
+                if (isMountedRef.current) {
+                  setNeedsTapToPlay(false);
+                  checkDimensions();
+                }
+              })
+              .catch((err) => {
+                console.warn('Video auto-play notice:', err);
+                if (isMountedRef.current) {
+                  setNeedsTapToPlay(true);
+                }
+              });
           }
         };
 
         video.onloadedmetadata = markReadyAndPlay;
+        video.onloadeddata = markReadyAndPlay;
         video.oncanplay = markReadyAndPlay;
-        video.onplaying = () => {
-          if (isMountedRef.current) setIsLiveReady(true);
+        video.onresize = () => {
+          checkDimensions();
         };
-
-        // Older Android WebViews sometimes skip loadedmetadata if stream starts hot
-        setTimeout(() => {
-          if (isMountedRef.current && video.videoWidth > 0) {
+        video.onplaying = () => {
+          if (!isMountedRef.current) return;
+          setNeedsTapToPlay(false);
+          if (!checkDimensions()) {
             setIsLiveReady(true);
           }
-        }, 450);
+        };
+
+        // Immediately attempt playback and poll up to 6s until video dimensions populate
+        markReadyAndPlay();
+        let ticks = 0;
+        clearReadyPoll();
+        readyPollRef.current = setInterval(() => {
+          ticks++;
+          if (!isMountedRef.current || !streamRef.current) {
+            clearReadyPoll();
+            return;
+          }
+          if (checkDimensions() || ticks >= 30) {
+            if (ticks >= 30 && video.readyState >= 2) {
+              setIsLiveReady(true);
+            }
+            clearReadyPoll();
+          }
+        }, 200);
       }
     } catch (err: any) {
       console.warn('Live camera access error:', err);
-      let errorMsg = 'ไม่สามารถเปิดกล้องสดได้ กรุณาอนุญาตการเข้าถึงกล้องในการตั้งค่าเบราว์เซอร์';
+      let errorMsg = 'ไม่สามารถเปิดกล้องสดในหน้าเว็บได้ กรุณาอนุญาตการใช้กล้อง หรือใช้ปุ่มถ่ายภาพผ่านกล้องมือถือด้านล่าง';
       if (err?.name === 'UnsupportedBrowserError') {
-        errorMsg = 'เบราว์เซอร์ในแอปนี้จำกัดการเปิดกล้อง กรุณากดเปิดลิงก์ใน Safari (iOS) หรือ Google Chrome (Android)';
+        errorMsg = 'เบราว์เซอร์ในแอปนี้จำกัดกล้องสดบนหน้าเว็บ คุณสามารถกดปุ่ม "ถ่ายภาพผ่านกล้องมือถือโดยตรง" ด้านล่างได้ทันที หรือเปิดลิงก์ใน Safari / Chrome';
       } else if (err?.name === 'NotAllowedError' || err?.name === 'PermissionDeniedError') {
-        errorMsg = 'การเข้าถึงกล้องถูกปฏิเสธ กรุณากด "อนุญาต (Allow)" กล้องในการตั้งค่าเบราว์เซอร์หรือโทรศัพท์';
+        errorMsg = 'การเข้าถึงกล้องถูกปฏิเสธ กรุณากด "อนุญาต (Allow)" ในเบราว์เซอร์ หรือใช้ปุ่ม "ถ่ายภาพผ่านกล้องมือถือโดยตรง" ด้านล่าง';
       } else if (err?.name === 'NotFoundError' || err?.name === 'DevicesNotFoundError') {
-        errorMsg = 'ไม่พบอุปกรณ์กล้องถ่ายภาพบนเครื่องนี้';
+        errorMsg = 'ไม่พบกล้องบนอุปกรณ์นี้ หรือสามารถกดปุ่มถ่ายภาพจากกล้องมือถือด้านล่างเพื่อลองเปิดแอปกล้องโดยตรง';
       } else if (err?.name === 'NotReadableError' || err?.name === 'TrackStartError') {
         errorMsg = 'กล้องกำลังถูกใช้งานโดยแอปอื่น กรุณาปิดแอปอื่นแล้วกด "ลองเปิดกล้องอีกครั้ง"';
       }
-      setCameraError(`${errorMsg} (ระบบไม่อนุญาตให้อัปโหลดภาพจากแกลเลอรีเพื่อความโปร่งใส)`);
+      setCameraError(errorMsg);
     } finally {
       if (isMountedRef.current) {
         setIsInitializing(false);
       }
     }
-  }, [facingMode, stopStream]);
+  }, [facingMode, stopStream, clearReadyPoll]);
 
   useEffect(() => {
     isMountedRef.current = true;
@@ -294,24 +360,16 @@ export const CameraCapture: React.FC<CameraCaptureProps> = ({
     setFacingMode((prev) => (prev === 'user' ? 'environment' : 'user'));
   };
 
-  // Capture crisp 3:4 vertical portrait Snapshot & burn Smart Time bottom-left watermark
-  const handleCapture = () => {
-    if (!videoRef.current || !canvasRef.current) return;
-    const video = videoRef.current;
-
-    if (video.videoWidth === 0 || video.videoHeight === 0) {
-      setCameraError('กำลังเชื่อมต่อสัญญาณกล้องสด กรุณารอสักครู่แล้วลองใหม่อีกครั้ง');
-      return;
-    }
-
-    setFlashEffect(true);
-    setTimeout(() => setFlashEffect(false), 200);
-
+  // Render crisp 3:4 vertical portrait image + Smart Time bottom-left watermark
+  const renderPortraitWatermarkedCanvas = (
+    source: HTMLVideoElement | HTMLImageElement,
+    rawW: number,
+    rawH: number,
+    mirrorHorizontal: boolean
+  ): string | null => {
+    if (!canvasRef.current) return null;
     const canvas = canvasRef.current;
-    const rawW = video.videoWidth || 720;
-    const rawH = video.videoHeight || 960;
 
-    // Crop video center cleanly to vertical 3:4 portrait aspect ratio matching the live viewfinder
     const targetAspect = 3 / 4;
     const sourceAspect = rawW / rawH;
     let sx = 0;
@@ -320,11 +378,9 @@ export const CameraCapture: React.FC<CameraCaptureProps> = ({
     let sh = rawH;
 
     if (sourceAspect > targetAspect) {
-      // Sensor is wider than 3:4 (e.g. 16:9 or 4:3 landscape sensor) -> crop horizontally to centered 3:4
       sw = Math.round(rawH * targetAspect);
       sx = Math.round((rawW - sw) / 2);
     } else if (sourceAspect < targetAspect) {
-      // Sensor is taller than 3:4 (e.g. 9:16 sensor) -> crop vertically to centered 3:4
       sh = Math.round(rawW / targetAspect);
       sy = Math.round((rawH - sh) / 2);
     }
@@ -335,23 +391,21 @@ export const CameraCapture: React.FC<CameraCaptureProps> = ({
     canvas.height = targetHeight;
 
     const ctx = canvas.getContext('2d');
-    if (!ctx) return;
+    if (!ctx) return null;
 
     ctx.imageSmoothingEnabled = true;
     ctx.imageSmoothingQuality = 'high';
 
-    // Mirror image horizontally for front selfie camera
-    if (facingMode === 'user') {
+    if (mirrorHorizontal) {
       ctx.translate(canvas.width, 0);
       ctx.scale(-1, 1);
     }
 
-    ctx.drawImage(video, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height);
+    ctx.drawImage(source, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height);
 
     // Reset transform so watermark text is readable (not mirrored)
     ctx.setTransform(1, 0, 0, 1, 0, 0);
 
-    // Build watermark strings (Smart Time, Coordinates, Lat/Lon, Time, Full Street Address)
     const thai = getThaiDateTime();
     const latText =
       watermarkInfo?.latitude !== undefined ? watermarkInfo.latitude.toFixed(6) : '13.578107';
@@ -363,7 +417,6 @@ export const CameraCapture: React.FC<CameraCaptureProps> = ({
       ? rawAddress.split('•').slice(1).join('•').trim()
       : rawAddress;
 
-    // Scale typography cleanly relative to portrait canvas width (~900px)
     const uiScale = Math.max(0.75, canvas.width / 900);
     const padX = Math.round(16 * uiScale);
     const padY = Math.round(12 * uiScale);
@@ -383,9 +436,8 @@ export const CameraCapture: React.FC<CameraCaptureProps> = ({
     ctx.font = `600 ${lineFontSize}px Kanit, "Noto Sans Thai", sans-serif`;
     const coordLines = wrapTextLines(ctx, `พิกัดที่ถ่ายรูป: ${pinName}`, contentW, 2);
 
-    // Total lines height calculation
     const headerH = Math.round(26 * uiScale);
-    const timeAndLatLonRows = 2; // Row 1: Time, Row 2: Lat/Lon
+    const timeAndLatLonRows = 2;
     const boxH =
       padY * 2 +
       headerH +
@@ -397,7 +449,6 @@ export const CameraCapture: React.FC<CameraCaptureProps> = ({
     const boxX = margin;
     const boxY = Math.max(margin, canvas.height - margin - boxH);
 
-    // Subtle dark gradient backdrop at bottom-left + rounded glass card
     const grad = ctx.createLinearGradient(0, boxY - 36, 0, canvas.height);
     grad.addColorStop(0, 'rgba(2, 6, 23, 0)');
     grad.addColorStop(1, 'rgba(2, 6, 23, 0.58)');
@@ -408,7 +459,6 @@ export const CameraCapture: React.FC<CameraCaptureProps> = ({
     drawRoundedRect(ctx, boxX, boxY, maxBoxW, boxH, Math.round(12 * uiScale));
     ctx.fill();
 
-    // Accent left emerald bar & border
     ctx.strokeStyle = 'rgba(16, 185, 129, 0.65)';
     ctx.lineWidth = Math.max(1.5, 2 * uiScale);
     ctx.stroke();
@@ -420,7 +470,6 @@ export const CameraCapture: React.FC<CameraCaptureProps> = ({
     let curY = boxY + padY + brandFontSize * 0.85;
     const textX = boxX + padX + Math.round(4 * uiScale);
 
-    // Line 1: Smart Time Brand + Verified Stamp
     ctx.fillStyle = '#34d399';
     ctx.font = `700 ${brandFontSize}px Kanit, "Noto Sans Thai", sans-serif`;
     ctx.fillText('Smart Time', textX, curY);
@@ -432,13 +481,11 @@ export const CameraCapture: React.FC<CameraCaptureProps> = ({
 
     curY += Math.round(24 * uiScale);
 
-    // Line 2: Thai Standard Date & Time
     ctx.fillStyle = '#ffffff';
     ctx.font = `600 ${lineFontSize}px Kanit, "Noto Sans Thai", sans-serif`;
     ctx.fillText(`เวลา: ${thai.fullThaiDate} ${thai.timeStr} น. (GMT+7)`, textX, curY);
     curY += lineGap;
 
-    // Line 3: Capture Pin / Location Name
     ctx.fillStyle = '#bae6fd';
     ctx.font = `600 ${lineFontSize}px Kanit, "Noto Sans Thai", sans-serif`;
     for (const cLine of coordLines) {
@@ -446,13 +493,11 @@ export const CameraCapture: React.FC<CameraCaptureProps> = ({
       curY += lineGap;
     }
 
-    // Line 4: Latitude - Longitude
     ctx.fillStyle = '#fde68a';
     ctx.font = `600 ${lineFontSize}px monospace`;
     ctx.fillText(`ละติจูด-ลองติจูด: ${latText}, ${lonText}`, textX, curY);
     curY += lineGap;
 
-    // Line 5+: Detailed Street / Subdistrict Address
     ctx.fillStyle = '#f1f5f9';
     ctx.font = `400 ${smallFontSize}px Kanit, "Noto Sans Thai", sans-serif`;
     for (const aLine of addressLines) {
@@ -467,11 +512,77 @@ export const CameraCapture: React.FC<CameraCaptureProps> = ({
     if (dataUrl.length > 650000) {
       dataUrl = canvas.toDataURL('image/jpeg', 0.65);
     }
+    return dataUrl;
+  };
 
-    // Stop live stream after photo taken
+  // Capture crisp 3:4 vertical portrait Snapshot & burn Smart Time bottom-left watermark
+  const handleCapture = () => {
+    if (!videoRef.current || !canvasRef.current) return;
+    const video = videoRef.current;
+
+    if (video.videoWidth === 0 || video.videoHeight === 0) {
+      setCameraError('กำลังเชื่อมต่อสัญญาณกล้องสด กรุณารอสักครู่หรือใช้ปุ่มกล้องมือถือด้านล่าง');
+      return;
+    }
+
+    setFlashEffect(true);
+    setTimeout(() => setFlashEffect(false), 200);
+
+    const rawW = video.videoWidth || 720;
+    const rawH = video.videoHeight || 960;
+    const dataUrl = renderPortraitWatermarkedCanvas(video, rawW, rawH, facingMode === 'user');
+    if (!dataUrl) return;
+
     stopStream();
-
     onPhotoCaptured(dataUrl);
+  };
+
+  // Handle Direct Native Camera Capture (Universal fallback for LINE/FB In-App Browser or blocked WebRTC)
+  const handleNativeCameraFile = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+
+    const objectUrl = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      try {
+        const w = img.naturalWidth || img.width || 720;
+        const h = img.naturalHeight || img.height || 960;
+        const dataUrl = renderPortraitWatermarkedCanvas(img, w, h, false);
+        if (dataUrl) {
+          stopStream();
+          setCameraError(null);
+          onPhotoCaptured(dataUrl);
+        }
+      } finally {
+        URL.revokeObjectURL(objectUrl);
+      }
+    };
+    img.onerror = () => {
+      URL.revokeObjectURL(objectUrl);
+      setCameraError('ไม่สามารถประมวลผลภาพถ่ายได้ กรุณาลองถ่ายใหม่อีกครั้ง');
+    };
+    img.src = objectUrl;
+  };
+
+  const handleTapToPlay = () => {
+    const video = videoRef.current;
+    if (!video) {
+      startCamera();
+      return;
+    }
+    const p = video.play?.();
+    if (p && typeof p.then === 'function') {
+      p.then(() => {
+        setNeedsTapToPlay(false);
+        if (video.videoWidth > 0) setIsLiveReady(true);
+      }).catch(() => {
+        startCamera();
+      });
+    } else {
+      startCamera();
+    }
   };
 
   const handleRetake = () => {
@@ -489,6 +600,14 @@ export const CameraCapture: React.FC<CameraCaptureProps> = ({
   return (
     <div className="w-full select-none">
       <canvas ref={canvasRef} className="hidden" />
+      <input
+        ref={nativeCameraInputRef}
+        type="file"
+        accept="image/*"
+        capture={facingMode === 'user' ? 'user' : 'environment'}
+        onChange={handleNativeCameraFile}
+        className="hidden"
+      />
 
       {/* Security Rule Badge */}
       <div className="mb-2.5 px-3 py-1.5 bg-amber-50 border border-amber-200/80 rounded-xl flex items-center justify-between text-[11px] text-amber-900">
@@ -524,7 +643,7 @@ export const CameraCapture: React.FC<CameraCaptureProps> = ({
         </div>
       ) : (
         // Live Vertical Portrait Camera Viewfinder (3:4 mobile selfie orientation)
-        <div className="relative rounded-2xl overflow-hidden bg-slate-950 border border-slate-800 shadow-inner aspect-[3/4] w-full max-w-[360px] sm:max-w-[390px] mx-auto min-h-[420px] flex flex-col items-center justify-center">
+        <div className="relative rounded-2xl overflow-hidden bg-slate-950 border border-slate-800 shadow-inner aspect-[3/4] w-full max-w-[360px] sm:max-w-[390px] mx-auto min-h-[360px] flex flex-col items-center justify-center">
           {/* Flash animation */}
           {flashEffect && <div className="absolute inset-0 bg-white z-30 animate-out fade-out duration-200" />}
 
@@ -575,23 +694,47 @@ export const CameraCapture: React.FC<CameraCaptureProps> = ({
             </button>
           </div>
 
-          {/* Error Message if camera blocked / permission denied */}
+          {/* Tap-to-play overlay when mobile Safari/Chrome requires a direct tap gesture to start video */}
+          {needsTapToPlay && !cameraError && (
+            <div className="absolute inset-0 bg-slate-950/75 backdrop-blur-xs p-5 flex flex-col items-center justify-center text-center z-24 text-white">
+              <button
+                type="button"
+                onClick={handleTapToPlay}
+                className="px-5 py-3 bg-emerald-600 hover:bg-emerald-500 text-white text-xs sm:text-sm font-bold rounded-2xl flex items-center gap-2 transition active:scale-95 shadow-lg cursor-pointer"
+              >
+                <Camera className="w-4 h-4" />
+                <span>แตะเพื่อเปิดภาพจากกล้อง</span>
+              </button>
+            </div>
+          )}
+
+          {/* Error Message + Native Camera Fallback if WebRTC getUserMedia blocked or unsupported */}
           {cameraError && (
             <div className="absolute inset-0 bg-slate-950/95 backdrop-blur-md p-5 flex flex-col items-center justify-center text-center z-25 text-white">
               <div className="w-12 h-12 rounded-full bg-rose-500/20 border border-rose-500/40 flex items-center justify-center mb-3">
                 <AlertCircle className="w-6 h-6 text-rose-400" />
               </div>
-              <p className="text-sm font-semibold text-rose-300 mb-1">ไม่สามารถเข้าถึงกล้องสดได้</p>
+              <p className="text-sm font-semibold text-rose-300 mb-1">ไม่สามารถเปิดกล้องสดในเบราว์เซอร์นี้ได้</p>
               <p className="text-xs text-slate-300 max-w-xs leading-relaxed mb-4">{cameraError}</p>
-              <button
-                type="button"
-                onClick={startCamera}
-                disabled={isInitializing}
-                className="px-5 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold rounded-xl flex items-center gap-2 transition active:scale-95 shadow-md cursor-pointer disabled:opacity-50"
-              >
-                <RefreshCw className={`w-3.5 h-3.5 ${isInitializing ? 'animate-spin' : ''}`} />
-                {isInitializing ? 'กำลังเปิดกล้อง...' : 'ลองเปิดกล้องอีกครั้ง'}
-              </button>
+              <div className="flex flex-col gap-2 w-full max-w-xs">
+                <button
+                  type="button"
+                  onClick={() => nativeCameraInputRef.current?.click()}
+                  className="w-full px-5 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold rounded-xl flex items-center justify-center gap-2 transition active:scale-95 shadow-md cursor-pointer"
+                >
+                  <Camera className="w-4 h-4" />
+                  <span>เปิดกล้องมือถือโดยตรง</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={startCamera}
+                  disabled={isInitializing}
+                  className="w-full px-5 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold rounded-xl flex items-center justify-center gap-2 transition active:scale-95 shadow-md cursor-pointer disabled:opacity-50"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${isInitializing ? 'animate-spin' : ''}`} />
+                  {isInitializing ? 'กำลังเปิดกล้อง...' : 'ลองเปิดกล้องสดอีกครั้ง'}
+                </button>
+              </div>
             </div>
           )}
 

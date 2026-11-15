@@ -119,10 +119,13 @@ export const LoginModal: React.FC<LoginModalProps> = ({ onLoginSuccess }) => {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     const cleanedUsername = username
-      .replace(/[\u200B-\u200D\uFEFF]/g, '')
+      .replace(/[\u200B-\u200D\uFEFF\u00A0]/g, '')
       .trim()
       .replace(/^@+/, '');
-    if (!cleanedUsername || !password) {
+    const cleanedPassword = password
+      .replace(/[\u200B-\u200D\uFEFF\u00A0]/g, '')
+      .trim();
+    if (!cleanedUsername || !cleanedPassword) {
       setErrorMsg('กรุณากรอก Username และ Password');
       return;
     }
@@ -131,7 +134,7 @@ export const LoginModal: React.FC<LoginModalProps> = ({ onLoginSuccess }) => {
     setErrorMsg(null);
 
     try {
-      const res = await api.login(cleanedUsername, password, rememberDevice);
+      const res = await api.login(cleanedUsername, cleanedPassword, rememberDevice);
       onLoginSuccess(res.user);
     } catch (err: any) {
       setErrorMsg(err.message || 'ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง');

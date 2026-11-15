@@ -1212,6 +1212,7 @@ async function startServer() {
       'Access-Control-Allow-Headers',
       'Content-Type, Authorization, Cache-Control, Pragma, Expires, X-Requested-With, Origin, Accept'
     );
+    res.setHeader('Permissions-Policy', 'camera=*, geolocation=*, microphone=()');
     if (req.method === 'OPTIONS') {
       res.sendStatus(204);
       return;
@@ -1416,7 +1417,7 @@ async function startServer() {
     }
 
     let user = db.users.find((u) => u.id === userId);
-    if (!user && firestoreDb) {
+    if (!user && firestoreDb && !isFirestoreQuotaActive()) {
       try {
         const cloudDoc = await Promise.race([
           getDoc(doc(firestoreDb, 'users', String(userId))),
@@ -1427,7 +1428,11 @@ async function startServer() {
           db.users.push(user);
           saveDatabase(db);
         }
-      } catch {}
+      } catch (err) {
+        if (isFirestoreQuotaError(err)) {
+          noteFirestoreQuotaHit('auth verify', err);
+        }
+      }
     }
 
     if (!user || user.status === 'inactive') {
@@ -2083,6 +2088,7 @@ async function startServer() {
     try {
       const {
         userId,
+        userSnapshot,
         type,
         photo,
         latitude,
@@ -2101,7 +2107,11 @@ async function startServer() {
       }
 
       let user = db.users.find((u) => u.id === userId);
-      if (!user && firestoreDb) {
+      if (!user && userSnapshot?.username) {
+        const snapUname = normalizeIdentifierText(userSnapshot.username).toLowerCase();
+        user = db.users.find((u) => normalizeIdentifierText(u.username).toLowerCase() === snapUname);
+      }
+      if (!user && firestoreDb && !isFirestoreQuotaActive()) {
         try {
           const userSnap = await getDoc(doc(firestoreDb, 'users', String(userId)));
           if (userSnap.exists()) {
@@ -2110,7 +2120,26 @@ async function startServer() {
               db.users.push(user);
             }
           }
-        } catch {}
+        } catch (err) {
+          if (isFirestoreQuotaError(err)) {
+            noteFirestoreQuotaHit('attendance user lookup', err);
+          }
+        }
+      }
+      if (!user && userSnapshot && userSnapshot.fullName) {
+        user = {
+          id: String(userId),
+          username: String(userSnapshot.username || userId),
+          fullName: String(userSnapshot.fullName),
+          role: userSnapshot.role || 'employee',
+          departmentId: userSnapshot.departmentId || 'dep_general',
+          departmentName: userSnapshot.departmentName || 'ทั่วไป',
+          position: String(userSnapshot.position || 'เจ้าหน้าที่ทั่วไป'),
+          phoneNumber: String(userSnapshot.phoneNumber || ''),
+          employeeCode: String(userSnapshot.employeeCode || 'STAFF'),
+          status: 'active',
+          createdAt: new Date().toISOString(),
+        };
       }
       if (!user) {
         res.status(404).json({ error: 'ไม่พบผู้ใช้งานนี้ในระบบ' });
@@ -2254,6 +2283,7 @@ ${newRecord.note ? `📝 หมายเหตุ/ภารกิจ: ${newRecor
         message: 'บันทึกเวลาเรียบร้อยแล้ว',
         record: newRecord,
         firestoreSynced,
+        quotaLimited: isFirestoreQuotaActive(),
         lineNotification: lineResult,
       });
     } catch (err: any) {
@@ -2326,6 +2356,7 @@ ${newRecord.note ? `📝 หมายเหตุ/ภารกิจ: ${newRecor
         message: `ซิงค์ข้อมูลสำเร็จ ${savedRecords.length} รายการ`,
         syncedCount: savedRecords.length,
         firestoreSynced: allFirestoreSynced,
+        quotaLimited: isFirestoreQuotaActive(),
         records: savedRecords,
       });
     } catch (err: any) {

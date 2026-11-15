@@ -1242,6 +1242,9 @@ export async function ensureFirestoreSafePhoto(
 export async function saveAttendanceRecordToFirestore(
   record: AttendanceRecord
 ): Promise<AttendanceRecord> {
+  if (isFirestoreQuotaLimited()) {
+    throw new Error('Firestore free daily quota limit exceeded');
+  }
   const path = `attendance/${record.id}`;
   try {
     const safePhoto = await ensureFirestoreSafePhoto(record.photo);
@@ -1269,6 +1272,9 @@ export async function createAttendanceInFirestore(payload: {
   note?: string;
   customTimestamp?: string;
 }): Promise<AttendanceRecord> {
+  if (isFirestoreQuotaLimited()) {
+    throw new Error('Firestore free daily quota limit exceeded');
+  }
   const path = 'attendance';
   try {
     let targetUser: User | null = null;
@@ -1403,6 +1409,9 @@ export async function syncAttendanceBatchToFirestore(
   records: AttendanceRecord[]
 ): Promise<AttendanceRecord[]> {
   if (!Array.isArray(records) || records.length === 0) return [];
+  if (isFirestoreQuotaLimited()) {
+    throw new Error('Firestore free daily quota limit exceeded');
+  }
   const path = 'attendance/batch';
   try {
     const usersSnap = await withTimeout(getDocs(collection(db, 'users')), 7000).catch(() => null);
