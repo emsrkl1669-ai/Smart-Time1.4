@@ -292,7 +292,17 @@ async function fetchCollectionViaRest<T>(collectionName: string): Promise<T[] | 
 
 function normalizeIdentifierText(input: string): string {
   const raw = String(input || '');
-  const stripped = raw.replace(/[\u200B-\u200D\uFEFF]/g, '').trim().replace(/^@+/, '');
+  const stripped = raw.replace(/[\u200B-\u200D\uFEFF\u00A0]/g, '').trim().replace(/^@+/, '');
+  try {
+    return stripped.normalize('NFC');
+  } catch {
+    return stripped;
+  }
+}
+
+function normalizePasswordText(input: string): string {
+  const raw = String(input || '');
+  const stripped = raw.replace(/[\u200B-\u200D\uFEFF]/g, '').replace(/\u00A0/g, ' ').trim();
   try {
     return stripped.normalize('NFC');
   } catch {
@@ -316,7 +326,7 @@ export async function authenticateWithFirestore(
   const lowerIdentifier = cleanIdentifier.toLowerCase();
   const compactIdentifier = cleanIdentifier.replace(/\s+/g, '').toLowerCase();
   const digitsIdentifier = cleanIdentifier.replace(/\D/g, '');
-  const cleanPassword = normalizeIdentifierText(password);
+  const cleanPassword = normalizePasswordText(password);
 
   let users: User[] = [];
   let hitQuota = false;
@@ -366,8 +376,8 @@ export async function authenticateWithFirestore(
   }
 
   const storedPass =
-    matched.password !== undefined && matched.password !== null && normalizeIdentifierText(String(matched.password)) !== ''
-      ? normalizeIdentifierText(String(matched.password))
+    matched.password !== undefined && matched.password !== null && normalizePasswordText(String(matched.password)) !== ''
+      ? normalizePasswordText(String(matched.password))
       : matched.username === 'admin'
       ? 'admin123'
       : '123456';

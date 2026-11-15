@@ -425,9 +425,17 @@ const MANDATORY_CHECKIN_LOCATION: WorkLocation = {
 
 function normalizeIdentifierText(val: unknown): string {
   const raw = String(val ?? '')
-    .replace(/[\u200B-\u200D\uFEFF]/g, '')
+    .replace(/[\u200B-\u200D\uFEFF\u00A0]/g, '')
     .trim()
     .replace(/^@+/, '');
+  return typeof raw.normalize === 'function' ? raw.normalize('NFC') : raw;
+}
+
+function normalizePasswordText(val: unknown): string {
+  const raw = String(val ?? '')
+    .replace(/[\u200B-\u200D\uFEFF]/g, '')
+    .replace(/\u00A0/g, ' ')
+    .trim();
   return typeof raw.normalize === 'function' ? raw.normalize('NFC') : raw;
 }
 
@@ -1326,7 +1334,7 @@ async function startServer() {
     const lowerIdentifier = rawIdentifier.toLowerCase();
     const compactIdentifier = rawIdentifier.replace(/\s+/g, '').toLowerCase();
     const digitsIdentifier = rawIdentifier.replace(/\D/g, '');
-    const cleanPassword = normalizeIdentifierText(password);
+    const cleanPassword = normalizePasswordText(password);
 
     const findMatchingUser = (userList: User[]) => {
       return userList.find((u) => {
@@ -1344,7 +1352,7 @@ async function startServer() {
     };
 
     const verifyUserPassword = (u: User) => {
-      const normalizedStored = normalizeIdentifierText(u.password);
+      const normalizedStored = normalizePasswordText(u.password);
       const storedPass =
         normalizedStored !== ''
           ? normalizedStored
@@ -1750,7 +1758,8 @@ async function startServer() {
   app.post('/api/users/:id/reset-password', async (req: Request, res: Response) => {
     const { id } = req.params;
     const { newPassword } = req.body || {};
-    if (!newPassword || String(newPassword).trim() === '') {
+    const cleanNewPw = normalizePasswordText(newPassword);
+    if (!cleanNewPw) {
       res.status(400).json({ error: 'กรุณากรอกรหัสผ่านใหม่' });
       return;
     }
@@ -1759,7 +1768,7 @@ async function startServer() {
       res.status(404).json({ error: 'ไม่พบผู้ใช้งาน' });
       return;
     }
-    db.users[userIndex].password = String(newPassword).trim();
+    db.users[userIndex].password = cleanNewPw;
     saveDatabase(db);
     await appendToAdminJournal({
       entity: 'user',
@@ -1790,8 +1799,13 @@ async function startServer() {
       return;
     }
 
-    const cleanUsername = String(username).trim().toLowerCase();
-    const exists = db.users.some((u) => u.username.toLowerCase() === cleanUsername);
+    const cleanUsername = normalizeIdentifierText(username).toLowerCase();
+    const cleanPassword = normalizePasswordText(password);
+    if (!cleanUsername || !cleanPassword || !String(fullName).trim()) {
+      res.status(400).json({ error: 'กรุณากรอกข้อมูลที่จำเป็นให้ครบถ้วน (Username, Password, ชื่อ-นามสกุล, สิทธิ์)' });
+      return;
+    }
+    const exists = db.users.some((u) => normalizeIdentifierText(u.username).toLowerCase() === cleanUsername);
     if (exists) {
       res.status(400).json({ error: 'Username นี้ถูกใช้งานแล้ว กรุณาเลือกชื่ออื่น' });
       return;
@@ -1809,7 +1823,7 @@ async function startServer() {
     const newUser: User = {
       id: `usr_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
       username: cleanUsername,
-      password: String(password).trim(),
+      password: cleanPassword,
       fullName: String(fullName).trim(),
       role: (['admin', 'employee', 'volunteer'].includes(role) ? role : 'employee') as any,
       departmentId: dept ? dept.id : 'dep_general',
@@ -1941,15 +1955,17 @@ async function startServer() {
     const target = db.users[userIndex];
 
     let nextUsername = target.username;
-    if (username !== undefined && String(username).trim() !== '') {
-      const candidate = String(username).trim().toLowerCase();
-      if (candidate !== target.username.toLowerCase()) {
-        const duplicate = db.users.some((u) => u.id !== id && u.username.toLowerCase() === candidate);
+    const candidateUsername = username !== undefined ? normalizeIdentifierText(username).toLowerCase() : '';
+    if (candidateUsername !== '') {
+      if (candidateUsername !== normalizeIdentifierText(target.username).toLowerCase()) {
+        const duplicate = db.users.some(
+          (u) => u.id !== id && normalizeIdentifierText(u.username).toLowerCase() === candidateUsername
+        );
         if (duplicate) {
-          res.status(400).json({ error: `Username "${candidate}" ถูกใช้งานแล้ว กรุณาเลือกชื่ออื่น` });
+          res.status(400).json({ error: `Username "${candidateUsername}" ถูกใช้งานแล้ว กรุณาเลือกชื่ออื่น` });
           return;
         }
-        nextUsername = candidate;
+        nextUsername = candidateUsername;
       }
     }
 
@@ -1980,11 +1996,13 @@ async function startServer() {
       }
     }
 
+    const cleanedPasswordUpdate = password !== undefined ? normalizePasswordText(password) : '';
+
     db.users[userIndex] = {
       ...target,
       username: nextUsername,
       fullName: fullName !== undefined ? String(fullName).trim() : target.fullName,
-      password: password !== undefined && String(password).trim() !== '' ? String(password).trim() : target.password,
+      password: cleanedPasswordUpdate !== '' ? cleanedPasswordUpdate : target.password,
       role: role ? role : target.role,
       departmentId: deptId,
       departmentName: deptName,

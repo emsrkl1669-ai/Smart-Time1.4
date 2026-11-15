@@ -23,7 +23,7 @@ import {
   Info,
 } from 'lucide-react';
 import { User, Department } from '../types';
-import { api, getPublicAppUrl } from '../services/api';
+import { api, getPublicAppUrl, copyTextToClipboard } from '../services/api';
 
 interface ShareAppModalProps {
   isOpen: boolean;
@@ -131,8 +131,8 @@ export const ShareAppModal: React.FC<ShareAppModalProps> = ({
   if (!isOpen) return null;
 
   // Copy standard app link
-  const handleCopyAppLink = () => {
-    navigator.clipboard.writeText(baseUrl);
+  const handleCopyAppLink = async () => {
+    await copyTextToClipboard(baseUrl);
     setCopiedLink(true);
     setShareSuccessToast('คัดลอกลิงก์ระบบเรียบร้อยแล้ว');
     setTimeout(() => {
@@ -142,7 +142,7 @@ export const ShareAppModal: React.FC<ShareAppModalProps> = ({
   };
 
   // Copy personal credentials card text
-  const handleCopyCredentials = () => {
+  const handleCopyCredentials = async () => {
     const formattedText = `🔐 ข้อมูลเข้าใช้งานระบบ Smart Time Attendance (ความลับเฉพาะบุคคล)\n` +
       `━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
       `👤 ชื่อ-นามสกุล: ${selectedUser.fullName}\n` +
@@ -156,7 +156,7 @@ export const ShareAppModal: React.FC<ShareAppModalProps> = ({
       `⚠️ คำเตือนความปลอดภัย: ข้อมูลนี้เป็นความลับเฉพาะตัวบุคคล กรุณาอย่าส่งต่อให้ผู้อื่น เพื่อความโปร่งใสและถูกต้องของข้อมูลการลงเวลาทำงาน\n` +
       `━━━━━━━━━━━━━━━━━━━━━━━━━━━━`;
 
-    navigator.clipboard.writeText(formattedText);
+    await copyTextToClipboard(formattedText);
     setCopiedCredentials(true);
     setShareSuccessToast(`คัดลอกข้อมูลและรหัสผ่านของ "${selectedUser.fullName}" เรียบร้อยแล้ว`);
     setTimeout(() => {
@@ -166,8 +166,8 @@ export const ShareAppModal: React.FC<ShareAppModalProps> = ({
   };
 
   // Copy personal link only
-  const handleCopyPersonalLinkOnly = () => {
-    navigator.clipboard.writeText(personalLoginUrl);
+  const handleCopyPersonalLinkOnly = async () => {
+    await copyTextToClipboard(personalLoginUrl);
     setCopiedUserOnly(true);
     setShareSuccessToast('คัดลอกลิงก์ส่วนบุคคลพร้อมกรอกชื่อผู้ใช้อัตโนมัติแล้ว');
     setTimeout(() => {

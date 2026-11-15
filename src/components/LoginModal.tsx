@@ -28,7 +28,7 @@ import {
   CheckCircle,
   RefreshCw,
 } from 'lucide-react';
-import { api, isOnline, getRememberedUsername, getPublicAppUrl } from '../services/api';
+import { api, isOnline, getRememberedUsername, getPublicAppUrl, copyTextToClipboard, normalizeIdentifier, normalizePassword } from '../services/api';
 import { User } from '../types';
 
 interface LoginModalProps {
@@ -66,13 +66,14 @@ export const LoginModal: React.FC<LoginModalProps> = ({ onLoginSuccess }) => {
     if (typeof window !== 'undefined') {
       const params = new URLSearchParams(window.location.search);
       const urlUser = params.get('u') || params.get('username');
-      if (urlUser) {
-        setUsername(urlUser.trim());
-        setWelcomeUserPrompt(`ยินดีต้อนรับ @${urlUser.trim()} กรุณากรอกรหัสผ่านเพื่อเข้าใช้งาน`);
+      const cleanedUrlUser = urlUser ? normalizeIdentifier(urlUser) : '';
+      if (cleanedUrlUser) {
+        setUsername(cleanedUrlUser);
+        setWelcomeUserPrompt(`ยินดีต้อนรับ @${cleanedUrlUser} กรุณากรอกรหัสผ่านเพื่อเข้าใช้งาน`);
       } else {
         const remembered = getRememberedUsername();
         if (remembered) {
-          setUsername(remembered);
+          setUsername(normalizeIdentifier(remembered) || remembered);
         }
       }
 
@@ -118,13 +119,8 @@ export const LoginModal: React.FC<LoginModalProps> = ({ onLoginSuccess }) => {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    const cleanedUsername = username
-      .replace(/[\u200B-\u200D\uFEFF\u00A0]/g, '')
-      .trim()
-      .replace(/^@+/, '');
-    const cleanedPassword = password
-      .replace(/[\u200B-\u200D\uFEFF\u00A0]/g, '')
-      .trim();
+    const cleanedUsername = normalizeIdentifier(username);
+    const cleanedPassword = normalizePassword(password);
     if (!cleanedUsername || !cleanedPassword) {
       setErrorMsg('กรุณากรอก Username และ Password');
       return;
@@ -177,31 +173,7 @@ export const LoginModal: React.FC<LoginModalProps> = ({ onLoginSuccess }) => {
 
   const copyAppUrl = async () => {
     const appUrl = getPublicAppUrl();
-    let copied = false;
-    try {
-      if (typeof navigator !== 'undefined' && navigator.clipboard && navigator.clipboard.writeText) {
-        await navigator.clipboard.writeText(appUrl);
-        copied = true;
-      }
-    } catch {
-      copied = false;
-    }
-    if (!copied && typeof document !== 'undefined') {
-      try {
-        const ta = document.createElement('textarea');
-        ta.value = appUrl;
-        ta.setAttribute('readonly', '');
-        ta.style.position = 'fixed';
-        ta.style.left = '-9999px';
-        document.body.appendChild(ta);
-        ta.select();
-        ta.setSelectionRange(0, appUrl.length);
-        copied = document.execCommand('copy');
-        document.body.removeChild(ta);
-      } catch {
-        copied = false;
-      }
-    }
+    const copied = await copyTextToClipboard(appUrl);
     if (copied) {
       setCopiedLink(true);
       setTimeout(() => setCopiedLink(false), 2500);

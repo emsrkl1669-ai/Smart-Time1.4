@@ -1,5 +1,6 @@
 import { User, Department, AttendanceRecord, SystemSettings, LineNotificationLog, AuthResponse, WorkLocation } from '../types';
 import { getThaiDateTime, setServerTimeOffset } from '../utils/thaiTime';
+import rosterBaseline from '../../data/roster_baseline.json';
 import {
   authenticateWithFirestore,
   verifyUserWithFirestore,
@@ -123,6 +124,68 @@ export function getPublicAppUrl(): string {
     return origin.replace('ais-dev-', 'ais-pre-');
   }
   return origin;
+}
+
+// Resilient cross-browser clipboard copy helper (works in iframes, iOS Safari, Android WebView, LINE browser)
+export async function copyTextToClipboard(text: string): Promise<boolean> {
+  try {
+    if (typeof navigator !== 'undefined' && navigator.clipboard && navigator.clipboard.writeText) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch {
+    // Fall back to execCommand below
+  }
+  if (typeof document !== 'undefined') {
+    try {
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      ta.setAttribute('readonly', '');
+      ta.style.position = 'fixed';
+      ta.style.left = '-9999px';
+      ta.style.top = '0';
+      document.body.appendChild(ta);
+      ta.focus();
+      ta.select();
+      ta.setSelectionRange(0, text.length);
+      const ok = document.execCommand('copy');
+      document.body.removeChild(ta);
+      if (ok) return true;
+    } catch {
+      return false;
+    }
+  }
+  return false;
+}
+
+export function normalizeIdentifier(val: unknown): string {
+  const cleaned = String(val ?? '')
+    .replace(/[\u200B-\u200D\uFEFF\u00A0]/g, '')
+    .trim()
+    .replace(/^@+/, '');
+  try {
+    return cleaned.normalize('NFC');
+  } catch {
+    return cleaned;
+  }
+}
+
+export function normalizePassword(val: unknown): string {
+  const cleaned = String(val ?? '')
+    .replace(/[\u200B-\u200D\uFEFF]/g, '')
+    .replace(/\u00A0/g, ' ')
+    .trim();
+  try {
+    return cleaned.normalize('NFC');
+  } catch {
+    return cleaned;
+  }
+}
+
+export function getBaselineUsersWithPasswords(): (User & { password?: string })[] {
+  return Array.isArray(rosterBaseline?.users)
+    ? (rosterBaseline.users as (User & { password?: string })[])
+    : [];
 }
 
 // Local cache helpers (resilient against 5MB QuotaExceededError on iOS Safari / Android WebView)
@@ -331,18 +394,10 @@ export const api = {
     return data;
   },
 
-  // Auth: Login with remember device option + Cloud Firestore & cross-browser fallback
+  // Auth: Login with remember device option + Cloud Firestore & cross-browser baseline fallback
   async login(username: string, password: string, rememberDevice: boolean = true): Promise<AuthResponse> {
-    const normalizeText = (val: string) => {
-      const cleaned = String(val || '').replace(/[\u200B-\u200D\uFEFF\u00A0]/g, '').trim();
-      try {
-        return cleaned.normalize('NFC');
-      } catch {
-        return cleaned;
-      }
-    };
-    const cleanIdentifier = normalizeText(username).replace(/^@+/, '');
-    const cleanPassword = normalizeText(password);
+    const cleanIdentifier = normalizeIdentifier(username);
+    const cleanPassword = normalizePassword(password);
 
     if (!cleanIdentifier || !cleanPassword) {
       throw new Error('กรุณากรอก Username และ Password');
@@ -353,6 +408,7 @@ export const api = {
     }
 
     let serverAuthRejectedMsg: string | null = null;
+    let backendReachable = false;
 
     if (isOnline()) {
       for (let attempt = 0; attempt < 2; attempt++) {
@@ -379,6 +435,7 @@ export const api = {
           }
 
           if (isJson && (res.status === 400 || res.status === 401 || res.status === 403)) {
+            backendReachable = true;
             const err = await res.json().catch(() => ({}));
             if (res.status === 403) {
               throw new Error(err.error || 'บัญชีผู้ใช้นี้ถูกระงับการใช้งาน กรุณาติดต่อผู้ดูแลระบบ');
@@ -387,7 +444,6 @@ export const api = {
             break;
           }
         } catch (err: any) {
-          // Explicit 403 error should stop immediately
           if (err?.message && err.message.includes('ถูกระงับการใช้งาน')) {
             throw err;
           }
@@ -399,11 +455,12 @@ export const api = {
         }
       }
 
-      if (serverAuthRejectedMsg && isFirestoreQuotaLimited()) {
+      // Express backend already checked both live database.json and Firestore before returning 401/403
+      if (backendReachable && serverAuthRejectedMsg) {
         throw new Error(serverAuthRejectedMsg);
       }
 
-      // Direct Cloud Firestore Fallback / Cross-Verification
+      // Direct Cloud Firestore Fallback (used when static hosting has no /api/* backend)
       try {
         const fbAuth = await authenticateWithFirestore(cleanIdentifier, cleanPassword);
         return this._completeClientLogin(fbAuth);
@@ -415,37 +472,50 @@ export const api = {
           msg.includes('ไม่พบข้อมูลบัญชีผู้ใช้ในฐานข้อมูล Cloud');
 
         if (isAuthRejection) {
-          throw new Error(serverAuthRejectedMsg || msg);
+          throw new Error(msg);
         }
-        // If server gave explicit 401 and Firestore had a transport error, surface the explicit 401
-        if (serverAuthRejectedMsg) {
-          throw new Error(serverAuthRejectedMsg);
-        }
-        console.warn('Firestore direct auth unavailable, checking local cache:', msg);
+        console.warn('Firestore direct auth unavailable, checking local cache & baseline roster:', msg);
       }
     }
 
-    if (serverAuthRejectedMsg) {
-      throw new Error(serverAuthRejectedMsg);
-    }
-
-    // Offline login fallback: Check if user exists in local cache
+    // Resilient fallback when both backend /api/* and Cloud Firestore are unavailable or quota-limited:
+    // Verify against CACHED_USERS merged with organization baseline roster (strictly verifying password)
     const lowerId = cleanIdentifier.toLowerCase();
     const compactId = cleanIdentifier.replace(/\s+/g, '').toLowerCase();
+    const digitsId = cleanIdentifier.replace(/\D/g, '');
+    const baselineUsers = getBaselineUsersWithPasswords();
     const cachedUsers = getCache<User[]>(STORAGE_KEYS.CACHED_USERS) || [];
     const currentCached = this.getCurrentUser();
-    const candidatePool = currentCached && !cachedUsers.some((u) => u.id === currentCached.id)
-      ? [currentCached, ...cachedUsers]
-      : cachedUsers;
 
+    const poolMap = new Map<string, User & { password?: string }>();
+    baselineUsers.forEach((u) => {
+      if (u && u.id) poolMap.set(u.id, u);
+    });
+    cachedUsers.forEach((u) => {
+      if (u && u.id) {
+        const prev = poolMap.get(u.id);
+        poolMap.set(u.id, prev ? { ...prev, ...u, password: prev.password || u.password } : u);
+      }
+    });
+    if (currentCached && currentCached.id) {
+      const prev = poolMap.get(currentCached.id);
+      poolMap.set(
+        currentCached.id,
+        prev ? { ...prev, ...currentCached, password: prev.password || currentCached.password } : currentCached
+      );
+    }
+
+    const candidatePool = Array.from(poolMap.values());
     const matched = candidatePool.find((u) => {
-      const uName = String(u.username || '').trim().toLowerCase();
-      const empCode = String(u.employeeCode || '').trim().toLowerCase();
-      const fullCompact = String(u.fullName || '').replace(/\s+/g, '').toLowerCase();
+      const uName = normalizeIdentifier(u.username).toLowerCase();
+      const empCode = normalizeIdentifier(u.employeeCode).toLowerCase();
+      const fullCompact = normalizeIdentifier(u.fullName).replace(/\s+/g, '').toLowerCase();
+      const phoneDigits = String(u.phoneNumber || '').replace(/\D/g, '');
       return (
         uName === lowerId ||
         (empCode !== '' && empCode === lowerId) ||
-        (compactId !== '' && fullCompact === compactId)
+        (compactId !== '' && fullCompact === compactId) ||
+        (digitsId.length >= 9 && phoneDigits === digitsId)
       );
     });
 
@@ -453,17 +523,28 @@ export const api = {
       if (matched.status === 'inactive') {
         throw new Error('บัญชีผู้ใช้นี้ถูกระงับการใช้งาน กรุณาติดต่อผู้ดูแลระบบ');
       }
-      this.setCurrentUser(matched);
-      return {
-        user: matched,
-        token: `offline_token_${matched.id}`,
-      };
+      const expectedPassword =
+        matched.password !== undefined && matched.password !== null && normalizePassword(matched.password) !== ''
+          ? normalizePassword(matched.password)
+          : matched.username === 'admin'
+          ? 'admin123'
+          : '123456';
+
+      if (expectedPassword !== cleanPassword) {
+        throw new Error('ชื่อผู้ใช้งานหรือรหัสผ่านไม่ถูกต้อง');
+      }
+
+      const { password: _, ...safeMatched } = matched;
+      return this._completeClientLogin({
+        user: safeMatched,
+        token: `${isOnline() ? 'fallback' : 'offline'}_token_${matched.id}_${Date.now()}`,
+      });
     }
 
     throw new Error(
       isOnline()
-        ? 'ไม่สามารถเชื่อมต่อระบบยืนยันตัวตนได้ชั่วคราว กรุณาลองใหม่อีกครั้ง'
-        : 'ไม่สามารถเข้าสู่ระบบในโหมดออฟไลน์ได้ (บัญชีนี้ยังไม่เคยล็อกอินบนอุปกรณ์นี้)'
+        ? 'ชื่อผู้ใช้งานหรือรหัสผ่านไม่ถูกต้อง'
+        : 'ไม่สามารถเข้าสู่ระบบในโหมดออฟไลน์ได้ (ไม่พบบัญชีนี้ในเครื่อง)'
     );
   },
 
@@ -494,7 +575,9 @@ export const api = {
         return fbUsers;
       }
     }
-    return getCache<User[]>(STORAGE_KEYS.CACHED_USERS) || [];
+    const cached = getCache<User[]>(STORAGE_KEYS.CACHED_USERS);
+    if (cached && cached.length > 0) return cached;
+    return getBaselineUsersWithPasswords().map(({ password: _, ...safe }) => safe);
   },
 
   async createUser(userData: Partial<User> & { password?: string }): Promise<User> {
@@ -621,7 +704,14 @@ export const api = {
         return fbUsers;
       }
     }
-    return this.getUsers();
+    const baseline = getBaselineUsersWithPasswords();
+    const cached = await this.getUsers();
+    if (cached.length === 0) return baseline;
+    const baselineMap = new Map(baseline.map((b) => [b.id, b]));
+    return cached.map((u) => ({
+      ...u,
+      password: (u as any).password || baselineMap.get(u.id)?.password,
+    }));
   },
 
   async resetUserPassword(id: string, newPassword: string): Promise<void> {
@@ -680,7 +770,9 @@ export const api = {
         return fbDepts;
       }
     }
-    return getCache<Department[]>(STORAGE_KEYS.CACHED_DEPARTMENTS) || [];
+    const cached = getCache<Department[]>(STORAGE_KEYS.CACHED_DEPARTMENTS);
+    if (cached && cached.length > 0) return cached;
+    return Array.isArray(rosterBaseline?.departments) ? (rosterBaseline.departments as Department[]) : [];
   },
 
   async saveDepartment(department: Partial<Department>): Promise<Department> {
@@ -758,7 +850,9 @@ export const api = {
         return fbLocs;
       }
     }
-    return getCache<WorkLocation[]>(STORAGE_KEYS.CACHED_LOCATIONS) || [];
+    const cached = getCache<WorkLocation[]>(STORAGE_KEYS.CACHED_LOCATIONS);
+    if (cached && cached.length > 0) return cached;
+    return Array.isArray(rosterBaseline?.locations) ? (rosterBaseline.locations as WorkLocation[]) : [];
   },
 
   async saveLocation(location: Partial<WorkLocation>): Promise<WorkLocation> {

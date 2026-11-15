@@ -31,7 +31,7 @@ import {
   Download,
   FileSpreadsheet,
 } from 'lucide-react';
-import { api } from '../services/api';
+import { api, getPublicAppUrl, copyTextToClipboard, normalizeIdentifier, normalizePassword } from '../services/api';
 
 interface AdminUserManagementProps {
   users: User[];
@@ -390,23 +390,24 @@ export const AdminUserManagement: React.FC<AdminUserManagementProps> = ({
     loadPasswords();
   }, [users]);
 
-  const handleCopyCredentials = (user: User) => {
+  const handleCopyCredentials = async (user: User) => {
     const pw = passwordsMap[user.id] || (user.username === 'admin' ? 'admin123' : '123456');
-    const personalUrl = `${window.location.origin}?u=${encodeURIComponent(user.username)}`;
+    const cleanUsername = normalizeIdentifier(user.username) || user.username;
+    const personalUrl = `${getPublicAppUrl()}?u=${encodeURIComponent(cleanUsername)}`;
     const text = `🔐 ข้อมูลเข้าใช้งานระบบ Smart Time Attendance (ความลับเฉพาะบุคคล)\n` +
       `━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
       `👤 ชื่อ-นามสกุล: ${user.fullName}\n` +
       `🏢 ฝ่าย/สังกัด: ${user.departmentName}\n` +
       `💼 ตำแหน่ง: ${user.position || '-'}\n` +
       `🪪 รหัสพนักงาน: ${user.employeeCode}\n\n` +
-      `🆔 ชื่อผู้ใช้งาน (Username): ${user.username}\n` +
+      `🆔 ชื่อผู้ใช้งาน (Username): ${cleanUsername}\n` +
       `🔑 รหัสผ่าน (Password): ${pw}\n\n` +
       `🌐 ลิงก์เข้าใช้งานระบบ: ${personalUrl}\n` +
       `(คลิกลิงก์เพื่อเปิดหน้าระบบและกรอกชื่อผู้ใช้ให้อัตโนมัติ สามารถเข้าใช้งานได้จากทุกเครื่อง ทุกอุปกรณ์)\n\n` +
       `⚠️ คำเตือนความปลอดภัย: ข้อมูลนี้เป็นความลับเฉพาะตัวบุคคล กรุณาอย่าส่งต่อให้ผู้อื่น เพื่อความโปร่งใสและถูกต้องของข้อมูลการลงเวลาทำงาน\n` +
       `━━━━━━━━━━━━━━━━━━━━━━━━━━━━`;
 
-    navigator.clipboard.writeText(text);
+    await copyTextToClipboard(text);
     setCopiedUserId(user.id);
     setCopiedToast(`คัดลอกข้อมูลและรหัสผ่านของ "${user.fullName}" เรียบร้อยแล้ว สามารถส่งต่อใน LINE ได้ทันที`);
     setTimeout(() => {
@@ -417,11 +418,11 @@ export const AdminUserManagement: React.FC<AdminUserManagementProps> = ({
 
   const handleResetPasswordSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!resetModalUser || !resetPasswordInput.trim()) return;
+    const newPw = normalizePassword(resetPasswordInput);
+    if (!resetModalUser || !newPw) return;
     setResetError(null);
     try {
       setIsLoading(true);
-      const newPw = resetPasswordInput.trim();
       await api.resetUserPassword(resetModalUser.id, newPw);
       setPasswordsMap((prev) => ({ ...prev, [resetModalUser.id]: newPw }));
       await loadPasswords();
@@ -498,8 +499,11 @@ export const AdminUserManagement: React.FC<AdminUserManagementProps> = ({
     try {
       if (editingUser) {
         // Update
-        const payload: any = { ...userFormData };
-        const newPassword = payload.password ? String(payload.password).trim() : '';
+        const payload: any = {
+          ...userFormData,
+          username: normalizeIdentifier(userFormData.username),
+        };
+        const newPassword = normalizePassword(payload.password);
         if (!newPassword) {
           delete payload.password;
         } else {
@@ -516,14 +520,17 @@ export const AdminUserManagement: React.FC<AdminUserManagementProps> = ({
         setTimeout(() => setCopiedToast(null), 4000);
       } else {
         // Create
-        if (!userFormData.password.trim()) {
-          throw new Error('กรุณากำหนดรหัสผ่านสำหรับผู้ใช้งานใหม่');
+        const cleanPw = normalizePassword(userFormData.password);
+        const cleanUname = normalizeIdentifier(userFormData.username);
+        if (!cleanPw || !cleanUname) {
+          throw new Error('กรุณากำหนด Username และรหัสผ่านสำหรับผู้ใช้งานใหม่');
         }
         const created = await api.createUser({
           ...userFormData,
-          password: userFormData.password.trim(),
+          username: cleanUname,
+          password: cleanPw,
         });
-        setPasswordsMap((prev) => ({ ...prev, [created.id]: userFormData.password.trim() }));
+        setPasswordsMap((prev) => ({ ...prev, [created.id]: cleanPw }));
         await loadPasswords();
         setIsAddUserOpen(false);
         setCopiedToast(`เพิ่มผู้ใช้งาน "${created.fullName}" สำเร็จแล้ว`);
@@ -803,9 +810,9 @@ export const AdminUserManagement: React.FC<AdminUserManagementProps> = ({
               )}
               <button
                 type="button"
-                onClick={() => {
-                  const link = window.location.origin;
-                  navigator.clipboard.writeText(link);
+                onClick={async () => {
+                  const link = getPublicAppUrl();
+                  await copyTextToClipboard(link);
                   setCopiedToast(`คัดลอกลิงก์ระบบแล้ว: ${link}\nสามารถส่งต่อให้บุคลากรใน LINE เพื่อเปิดบนมือถือได้ทันที`);
                   setTimeout(() => setCopiedToast(null), 3500);
                 }}
@@ -890,7 +897,7 @@ export const AdminUserManagement: React.FC<AdminUserManagementProps> = ({
                         <td className="py-3 px-4">
                           <div className="space-y-1">
                             <div className="flex items-center gap-1 font-mono text-xs font-semibold text-slate-800">
-                              <span className="text-indigo-600 font-bold">@{user.username}</span>
+                              <span className="text-indigo-600 font-bold"><span className="select-none">@</span>{user.username}</span>
                             </div>
                             <div className="flex items-center gap-1.5 text-[11px] text-slate-500">
                               <span className="text-slate-400 font-mono text-[10px]">PASS:</span>
