@@ -22,7 +22,8 @@ import {
   getDocs,
   collection,
   deleteDoc,
-  onSnapshot,
+  setLogLevel,
+  terminate,
   Firestore,
 } from 'firebase/firestore';
 
@@ -32,6 +33,7 @@ let firestoreConfig: any = null;
 try {
   const cfgPath = path.join(__dirname, 'firebase-applet-config.json');
   if (fs.existsSync(cfgPath)) {
+    setLogLevel('error');
     firestoreConfig = JSON.parse(fs.readFileSync(cfgPath, 'utf-8'));
     const fbApp = getApps().length === 0 ? initializeApp(firestoreConfig) : getApp();
     firestoreDb = getFirestore(fbApp, firestoreConfig.firestoreDatabaseId || undefined);
@@ -291,7 +293,7 @@ async function syncFromFirestoreIfNewer(force = false): Promise<void> {
     return inFlightCloudSync;
   }
   const now = Date.now();
-  if (!force && now - lastCloudMetaCheck < 10000) return;
+  if (!force && now - lastCloudMetaCheck < 45000) return;
   lastCloudMetaCheck = now;
 
   inFlightCloudSync = (async () => {
@@ -1417,47 +1419,8 @@ async function startServer() {
     }
   }
 
-  // Real-time Firestore listener on server so direct client/Vercel writes propagate automatically without polling reads
-  let unsubServerMetaListener: (() => void) | null = null;
-  if (firestoreDb && !isFirestoreQuotaActive()) {
-    let initialMetaSeen = false;
-    unsubServerMetaListener = onSnapshot(
-      doc(firestoreDb, '_meta', 'sync'),
-      (snap) => {
-        if (!initialMetaSeen) {
-          initialMetaSeen = true;
-          if (snap.exists()) {
-            const meta = snap.data() as any;
-            const remoteVer = Number(meta?.version || 0);
-            if (remoteVer && meta?.source === 'client-firestore' && remoteVer !== lastHandledCloudVersion) {
-              syncFromFirestoreIfNewer(true).catch(() => {});
-            } else if (remoteVer) {
-              persistLastHandledCloudVersion(remoteVer);
-            }
-          }
-          return;
-        }
-        if (snap.exists()) {
-          const meta = snap.data() as any;
-          const remoteVer = Number(meta?.version || 0);
-          if (remoteVer && remoteVer !== lastHandledCloudVersion) {
-            syncFromFirestoreIfNewer(true).catch(() => {});
-          }
-        }
-      },
-      (err) => {
-        if (isFirestoreQuotaError(err)) {
-          noteFirestoreQuotaHit('realtime listener', err);
-          if (unsubServerMetaListener) {
-            try { unsubServerMetaListener(); } catch {}
-            unsubServerMetaListener = null;
-          }
-        } else {
-          console.warn('Server Firestore _meta/sync listener note:', err?.message || err);
-        }
-      }
-    );
-  }
+  // Background meta sync uses throttled single-doc BatchGetDocuments reads (in syncFromFirestoreIfNewer)
+  // rather than a long-lived Node gRPC Listen stream, preventing idle gRPC CANCELLED stream errors.
 
   // JSON Body parser (high limit for base64 photo capture)
   app.use(express.json({ limit: '20mb' }));
@@ -1505,8 +1468,9 @@ async function startServer() {
     });
   });
 
-  // 1.0 Real-Time Instant Sync-Check (serves local version in-memory; onSnapshot updates it in real time with 0 polling reads)
+  // 1.0 Real-Time Instant Sync-Check (triggers throttled non-blocking cloud meta check without gRPC Listen streams)
   app.get('/api/sync-check', (req: Request, res: Response) => {
+    syncFromFirestoreIfNewer().catch(() => {});
     res.json({
       version: dbVersion,
       lastModified: lastBackupTimestamp,
@@ -3301,16 +3265,23 @@ ${newRecord.note ? `📝 หมายเหตุ/ภารกิจ: ${newRecor
     }
   });
 
-  // Graceful shutdown: save DB before process exit
-  process.on('SIGINT', () => {
-    console.log('Received SIGINT: Saving database before shutdown...');
+  // Graceful shutdown: save DB and close Firestore gRPC channel before process exit
+  const handleShutdown = async (signal: string) => {
+    console.log(`Received ${signal}: Saving database before shutdown...`);
     saveDatabase(db);
+    if (firestoreDb) {
+      await Promise.race([
+        terminate(firestoreDb).catch(() => {}),
+        new Promise((resolve) => setTimeout(resolve, 1500)),
+      ]);
+    }
     process.exit(0);
+  };
+  process.on('SIGINT', () => {
+    void handleShutdown('SIGINT');
   });
   process.on('SIGTERM', () => {
-    console.log('Received SIGTERM: Saving database before shutdown...');
-    saveDatabase(db);
-    process.exit(0);
+    void handleShutdown('SIGTERM');
   });
 
   // ================= VITE DEV MIDDLEWARE OR STATIC SERVING =================
