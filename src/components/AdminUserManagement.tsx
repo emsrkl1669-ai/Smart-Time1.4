@@ -1,5 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { User, Department, Role, WorkLocation } from '../types';
+import { triggerBrowserDownload } from '../utils/export';
+import { getThaiDateTime } from '../utils/thaiTime';
 import {
   Users,
   UserPlus,
@@ -189,14 +191,7 @@ export const AdminUserManagement: React.FC<AdminUserManagementProps> = ({
 
     const csvContent = '\uFEFF' + [headers.join(','), ...rows].join('\n');
     const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.setAttribute('download', `smart_attendance_users_${new Date().toISOString().slice(0, 10)}.csv`);
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    URL.revokeObjectURL(url);
+    triggerBrowserDownload(blob, `smart_attendance_users_${getThaiDateTime().dateStr}.csv`);
   };
 
   const parseCsvPreview = (text: string) => {
@@ -374,13 +369,15 @@ export const AdminUserManagement: React.FC<AdminUserManagementProps> = ({
   const loadPasswords = async () => {
     try {
       const list = await api.getUsersWithPasswords();
-      const map: Record<string, string> = {};
-      list.forEach((u) => {
-        if (u.id && (u as any).password) {
-          map[u.id] = (u as any).password;
-        }
+      setPasswordsMap((prev) => {
+        const map: Record<string, string> = { ...prev };
+        list.forEach((u) => {
+          if (u.id && (u as any).password) {
+            map[u.id] = (u as any).password;
+          }
+        });
+        return map;
       });
-      setPasswordsMap(map);
     } catch (e) {
       console.warn('Could not load passwords', e);
     }
@@ -1247,22 +1244,11 @@ export const AdminUserManagement: React.FC<AdminUserManagementProps> = ({
                     onChange={(e) => setUserFormData({ ...userFormData, departmentId: e.target.value })}
                     className="w-full text-xs sm:text-sm p-2.5 rounded-xl border border-slate-200 focus:ring-2 focus:ring-indigo-500 focus:outline-none"
                   >
-                    <option value="dep_ems_rescue">กู้ชีพ-กู้ภัย</option>
-                    <option value="dep_rescue">กู้ภัย</option>
-                    <option value="dep_social_welfare">สังคมสงเคราะห์</option>
-                    <option value="dep_admin_mgmt">บริหาร</option>
-                    <option value="dep_accounting">บัญชี</option>
-                    <option value="dep_donation">บริจาค</option>
-                    <option value="dep_security">รปภ.</option>
-                    <option value="dep_housekeeping">แม่บ้าน</option>
-                    <option value="dep_general">ทั่วไป</option>
-                    {allDepartments
-                      .filter((d) => !STANDARD_DEPARTMENTS.some((std) => std.id === d.id))
-                      .map((dept) => (
-                        <option key={dept.id} value={dept.id}>
-                          {dept.name}
-                        </option>
-                      ))}
+                    {allDepartments.map((dept) => (
+                      <option key={dept.id} value={dept.id}>
+                        {dept.name}
+                      </option>
+                    ))}
                   </select>
                 </div>
               </div>

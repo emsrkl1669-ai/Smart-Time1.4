@@ -1506,6 +1506,17 @@
   },
   "lineLogs": [
     {
+      "id": "log_1794793143076_stm9r",
+      "timestamp": "2026-11-16T01:39:03.076Z",
+      "recipientDepartment": "กู้ภัย",
+      "tokenUsed": "โหมดจำลอง (ยังไม่ได้ใส่ Token)",
+      "type": "check_in",
+      "userName": "🟢 บันทึกเวลาเข้างาน (Check-In)",
+      "message": "\n🟢 บันทึกเวลาเข้างาน (Check-In)\n👤 ผู้ลงเวลา: ทดสอบ ก่อนแก้ (TEST-999)\n🏢 แผนก/กลุ่ม: กู้ภัย\n🏷️ สถานะ: 💼 พนักงาน\n⏰ เวลา (ประเทศไทย): วันจันทร์ที่ 16 พฤศจิกายน 2569 เวลา 08:39:03 น.\n📍 สถานที่: Test HQ\n🎯 จุดปฏิบัติงาน: มูลนิธิร่วมกุศล สมุทรปราการ (ศูนย์วิทยุบัวหลวง กู้ชีพกู้ภัย) (⚠️ อยู่นอกรัศมี 54988 ม.)\n🌐 พิกัด GPS: 14.072500, 100.605600\n📝 หมายเหตุ/ภารกิจ: persistence verification\n🗺️ ดูแผนที่: https://www.google.com/maps?q=14.0725,100.6056",
+      "status": "simulated",
+      "responseDetails": "จำลองสำเร็จ (ใส่ Token ในเมนูตั้งค่า LINE หรือ แผนก เพื่อส่งเข้ากลุ่ม LINE จริง)"
+    },
+    {
       "id": "log_1794704850555_xw8ph",
       "timestamp": "2026-11-15T01:07:30.555Z",
       "recipientDepartment": "กู้ชีพ-กู้ภัย",
@@ -1670,5 +1681,16 @@
       "status": "simulated",
       "responseDetails": "System Ready"
     }
-  ]
+  ],
+  "deletedIds": {
+    "users": {
+      "usr_1794793142959_muvd": "2026-11-16T01:39:18.083Z"
+    },
+    "departments": {},
+    "locations": {},
+    "attendance": {
+      "att_1794793143076_69w9": "2026-11-16T01:39:17.773Z"
+    }
+  },
+  "lastSavedAt": "2026-11-16T01:39:18.084Z"
 }

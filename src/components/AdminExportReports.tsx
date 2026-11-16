@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { AttendanceRecord, Department } from '../types';
 import { FileSpreadsheet, FileText, Printer, Download, Filter, Calendar, Users, Building2, CheckCircle2 } from 'lucide-react';
 import { exportToExcel, exportToCSV, exportToPDF } from '../utils/export';
+import { getThaiDateTime, getThaiDateOffsetStr, getThaiMonthStartStr } from '../utils/thaiTime';
 
 interface AdminExportReportsProps {
   records: AttendanceRecord[];
@@ -19,11 +20,10 @@ export const AdminExportReports: React.FC<AdminExportReportsProps> = ({
   const [endDate, setEndDate] = useState('');
   const [isExportingPdf, setIsExportingPdf] = useState(false);
 
-  // Date calculation
-  const now = new Date();
-  const todayStr = now.toISOString().split('T')[0];
-  const sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 3600 * 1000).toISOString().split('T')[0];
-  const firstDayOfMonth = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().split('T')[0];
+  // Bangkok GMT+7 Date calculation
+  const todayStr = getThaiDateTime().dateStr;
+  const sevenDaysAgo = getThaiDateOffsetStr(7);
+  const firstDayOfMonth = getThaiMonthStartStr();
 
   const filteredRecords = records.filter((r) => {
     // Role & Dept
@@ -49,19 +49,19 @@ export const AdminExportReports: React.FC<AdminExportReportsProps> = ({
   const volunteersCount = filteredRecords.filter((r) => r.userRole === 'volunteer').length;
 
   const handleDownloadExcel = () => {
-    const filename = `รายงานการลงเวลา_${new Date().toISOString().split('T')[0]}.xlsx`;
+    const filename = `รายงานการลงเวลา_${getThaiDateTime().dateStr}.xlsx`;
     exportToExcel(filteredRecords, filename);
   };
 
   const handleDownloadCSV = () => {
-    const filename = `รายงานการลงเวลา_${new Date().toISOString().split('T')[0]}.csv`;
+    const filename = `รายงานการลงเวลา_${getThaiDateTime().dateStr}.csv`;
     exportToCSV(filteredRecords, filename);
   };
 
   const handlePrint = async () => {
     setIsExportingPdf(true);
     try {
-      const filename = `รายงานการลงเวลา_${new Date().toISOString().split('T')[0]}.pdf`;
+      const filename = `รายงานการลงเวลา_${getThaiDateTime().dateStr}.pdf`;
       await exportToPDF(filteredRecords, filename, 'รายงานการลงเวลาเข้า-ออกงานและภารกิจ');
     } finally {
       setIsExportingPdf(false);

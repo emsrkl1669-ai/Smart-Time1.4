@@ -1,5 +1,6 @@
 import React from 'react';
 import { User, Department, AttendanceRecord } from '../types';
+import { getThaiDateTime } from '../utils/thaiTime';
 import {
   Users,
   Building2,
@@ -27,7 +28,7 @@ export const AdminOverview: React.FC<AdminOverviewProps> = ({
   records,
   onNavigateTab,
 }) => {
-  const todayStr = new Date().toISOString().split('T')[0];
+  const todayStr = getThaiDateTime().dateStr;
   const todayRecords = records.filter((r) => r.date === todayStr);
 
   const todayCheckIns = todayRecords.filter((r) => r.type === 'check_in').length;

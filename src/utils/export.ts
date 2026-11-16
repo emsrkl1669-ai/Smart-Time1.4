@@ -3,6 +3,74 @@ import { jsPDF } from 'jspdf';
 import { AttendanceRecord } from '../types';
 import { getThaiDateTime } from './thaiTime';
 
+const THAI_CANVAS_FONT = 'Kanit, "Noto Sans Thai", "Sarabun", "Thonburi", "Leelawadee UI", "Segoe UI", sans-serif';
+
+export function triggerBrowserDownload(contentOrUrl: Blob | string, filename: string): void {
+  if (typeof document === 'undefined') return;
+  let blobUrl: string | null = null;
+  let href = '';
+
+  try {
+    if (contentOrUrl instanceof Blob) {
+      blobUrl = URL.createObjectURL(contentOrUrl);
+      href = blobUrl;
+    } else if (typeof contentOrUrl === 'string' && contentOrUrl.startsWith('data:')) {
+      // Convert data URL to Blob so iOS Safari and Android WebView don't block or truncate large base64 downloads
+      const commaIdx = contentOrUrl.indexOf(',');
+      if (commaIdx !== -1) {
+        const meta = contentOrUrl.slice(5, commaIdx);
+        const mime = meta.split(';')[0] || 'application/octet-stream';
+        const isBase64 = meta.includes(';base64');
+        const payload = contentOrUrl.slice(commaIdx + 1);
+        if (isBase64) {
+          const byteChars = atob(payload);
+          const byteArrays = new Uint8Array(byteChars.length);
+          for (let i = 0; i < byteChars.length; i++) {
+            byteArrays[i] = byteChars.charCodeAt(i);
+          }
+          const blob = new Blob([byteArrays], { type: mime });
+          blobUrl = URL.createObjectURL(blob);
+          href = blobUrl;
+        } else {
+          const blob = new Blob([decodeURIComponent(payload)], { type: mime });
+          blobUrl = URL.createObjectURL(blob);
+          href = blobUrl;
+        }
+      } else {
+        href = contentOrUrl;
+      }
+    } else {
+      href = contentOrUrl;
+    }
+  } catch {
+    href = typeof contentOrUrl === 'string' ? contentOrUrl : '';
+  }
+
+  if (!href) return;
+
+  const link = document.createElement('a');
+  link.href = href;
+  link.download = filename;
+  link.rel = 'noopener';
+  link.style.display = 'none';
+  document.body.appendChild(link);
+  link.click();
+
+  setTimeout(() => {
+    try {
+      if (link.parentNode) {
+        document.body.removeChild(link);
+      }
+    } catch {}
+    if (blobUrl) {
+      try {
+        URL.revokeObjectURL(blobUrl);
+      } catch {}
+    }
+  }, 10000);
+}
+
+
 export function exportToExcel(records: AttendanceRecord[], filename = 'attendance_report.xlsx') {
   const rows = records.map((r, index) => ({
     'ลำดับ': index + 1,
@@ -90,14 +158,7 @@ export function exportToCSV(records: AttendanceRecord[], filename = 'attendance_
   const csvContent = '\uFEFF' + [headers.join(','), ...csvRows.map((e) => e.join(','))].join('\r\n');
 
   const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement('a');
-  link.setAttribute('href', url);
-  link.setAttribute('download', filename);
-  document.body.appendChild(link);
-  link.click();
-  document.body.removeChild(link);
-  URL.revokeObjectURL(url);
+  triggerBrowserDownload(blob, filename);
 }
 
 function loadImageAsync(src: string): Promise<HTMLImageElement | null> {
@@ -126,7 +187,7 @@ function truncateTextToFit(ctx: CanvasRenderingContext2D, text: string, maxWidth
 
 export async function exportToPDF(
   records: AttendanceRecord[],
-  filename = `SmartTime-Attendance-${new Date().toISOString().split('T')[0]}.pdf`,
+  filename = `SmartTime-Attendance-${getThaiDateTime().dateStr}.pdf`,
   title = 'รายงานการลงเวลาเข้า-ออกงาน (Smart Time Attendance)'
 ): Promise<void> {
   try {
@@ -189,11 +250,11 @@ export async function exportToPDF(
     ctx.fillRect(MARGIN, MARGIN, 10, 92);
 
     ctx.fillStyle = '#34d399';
-    ctx.font = 'bold 26px Kanit, "Noto Sans Thai", sans-serif';
+    ctx.font = 'bold 26px Kanit, "Noto Sans Thai", "Sarabun", "Thonburi", "Leelawadee UI", "Segoe UI", sans-serif';
     ctx.fillText(title, MARGIN + 28, MARGIN + 40);
 
     ctx.fillStyle = '#cbd5e1';
-    ctx.font = '16px Kanit, "Noto Sans Thai", sans-serif';
+    ctx.font = '16px Kanit, "Noto Sans Thai", "Sarabun", "Thonburi", "Leelawadee UI", "Segoe UI", sans-serif';
     ctx.fillText(
       `พิมพ์เมื่อ: ${thaiNow.fullThaiDate} เวลา ${thaiNow.timeStr} น. (GMT+7)  •  ฐานข้อมูลกลาง & Firebase (smart-time-ca6f9)`,
       MARGIN + 28,
@@ -202,7 +263,7 @@ export async function exportToPDF(
 
     // Page badge top-right
     ctx.fillStyle = '#e2e8f0';
-    ctx.font = 'bold 16px Kanit, "Noto Sans Thai", sans-serif';
+    ctx.font = 'bold 16px Kanit, "Noto Sans Thai", "Sarabun", "Thonburi", "Leelawadee UI", "Segoe UI", sans-serif';
     ctx.textAlign = 'right';
     ctx.fillText(`หน้า ${pageIdx + 1} / ${totalPages}`, PAGE_W - MARGIN - 24, MARGIN + 42);
     ctx.textAlign = 'left';
@@ -228,11 +289,11 @@ export async function exportToPDF(
         ctx.strokeRect(x, cursorY, cardW, 64);
 
         ctx.fillStyle = '#475569';
-        ctx.font = '14px Kanit, "Noto Sans Thai", sans-serif';
+        ctx.font = '14px Kanit, "Noto Sans Thai", "Sarabun", "Thonburi", "Leelawadee UI", "Segoe UI", sans-serif';
         ctx.fillText(k.label, x + 16, cursorY + 24);
 
         ctx.fillStyle = k.fg;
-        ctx.font = 'bold 22px Kanit, "Noto Sans Thai", sans-serif';
+        ctx.font = 'bold 22px Kanit, "Noto Sans Thai", "Sarabun", "Thonburi", "Leelawadee UI", "Segoe UI", sans-serif';
         ctx.fillText(k.value, x + 16, cursorY + 52);
       });
       cursorY += 82;
@@ -247,7 +308,7 @@ export async function exportToPDF(
     ctx.strokeRect(MARGIN, cursorY, TABLE_W, TH_H);
 
     ctx.fillStyle = '#1e293b';
-    ctx.font = 'bold 16px Kanit, "Noto Sans Thai", sans-serif';
+    ctx.font = 'bold 16px Kanit, "Noto Sans Thai", "Sarabun", "Thonburi", "Leelawadee UI", "Segoe UI", sans-serif';
     let colX = MARGIN;
     for (const col of cols) {
       if (col.align === 'center') {
@@ -275,7 +336,7 @@ export async function exportToPDF(
       ctx.strokeStyle = '#cbd5e1';
       ctx.strokeRect(MARGIN, cursorY, TABLE_W, 120);
       ctx.fillStyle = '#64748b';
-      ctx.font = '18px Kanit, "Noto Sans Thai", sans-serif';
+      ctx.font = '18px Kanit, "Noto Sans Thai", "Sarabun", "Thonburi", "Leelawadee UI", "Segoe UI", sans-serif';
       ctx.textAlign = 'center';
       ctx.fillText('ยังไม่มีรายการบันทึกการลงเวลาในระบบ (พร้อมใช้งานร่วมกับฐานข้อมูล Cloud Firestore)', PAGE_W / 2, cursorY + 68);
       ctx.textAlign = 'left';
@@ -294,7 +355,7 @@ export async function exportToPDF(
 
         // Col 1: Index
         ctx.fillStyle = '#334155';
-        ctx.font = 'bold 15px Kanit, "Noto Sans Thai", sans-serif';
+        ctx.font = 'bold 15px Kanit, "Noto Sans Thai", "Sarabun", "Thonburi", "Leelawadee UI", "Segoe UI", sans-serif';
         ctx.textAlign = 'center';
         ctx.fillText(String(globalIdx + 1), rx + cols[0].width / 2, rowY + 46);
         ctx.textAlign = 'left';
@@ -312,7 +373,7 @@ export async function exportToPDF(
           ctx.strokeRect(imgX, imgY, boxW, boxH);
         } else {
           ctx.fillStyle = '#94a3b8';
-          ctx.font = '13px Kanit, "Noto Sans Thai", sans-serif';
+          ctx.font = '13px Kanit, "Noto Sans Thai", "Sarabun", "Thonburi", "Leelawadee UI", "Segoe UI", sans-serif';
           ctx.textAlign = 'center';
           ctx.fillText('ไม่มีรูป', rx + cols[1].width / 2, rowY + 46);
           ctx.textAlign = 'left';
@@ -321,7 +382,7 @@ export async function exportToPDF(
 
         // Col 3: Date & Time
         ctx.fillStyle = '#0f172a';
-        ctx.font = 'bold 15px Kanit, "Noto Sans Thai", sans-serif';
+        ctx.font = 'bold 15px Kanit, "Noto Sans Thai", "Sarabun", "Thonburi", "Leelawadee UI", "Segoe UI", sans-serif';
         ctx.fillText(rec.date || '-', rx + 12, rowY + 34);
         ctx.fillStyle = '#475569';
         ctx.font = '15px monospace';
@@ -330,10 +391,10 @@ export async function exportToPDF(
 
         // Col 4: Name + Role
         ctx.fillStyle = '#0f172a';
-        ctx.font = 'bold 16px Kanit, "Noto Sans Thai", sans-serif';
+        ctx.font = 'bold 16px Kanit, "Noto Sans Thai", "Sarabun", "Thonburi", "Leelawadee UI", "Segoe UI", sans-serif';
         ctx.fillText(truncateTextToFit(ctx, rec.userName, cols[3].width - 20), rx + 12, rowY + 35);
         ctx.fillStyle = rec.userRole === 'volunteer' ? '#047857' : '#4338ca';
-        ctx.font = '14px Kanit, "Noto Sans Thai", sans-serif';
+        ctx.font = '14px Kanit, "Noto Sans Thai", "Sarabun", "Thonburi", "Leelawadee UI", "Segoe UI", sans-serif';
         const roleLabel =
           rec.userRole === 'volunteer' ? 'อาสาสมัคร' : rec.userRole === 'admin' ? 'ผู้ดูแลระบบ' : 'พนักงาน';
         ctx.fillText(roleLabel, rx + 12, rowY + 58);
@@ -341,14 +402,14 @@ export async function exportToPDF(
 
         // Col 5: Department
         ctx.fillStyle = '#334155';
-        ctx.font = '15px Kanit, "Noto Sans Thai", sans-serif';
+        ctx.font = '15px Kanit, "Noto Sans Thai", "Sarabun", "Thonburi", "Leelawadee UI", "Segoe UI", sans-serif';
         ctx.fillText(truncateTextToFit(ctx, rec.departmentName || '-', cols[4].width - 20), rx + 12, rowY + 46);
         rx += cols[4].width;
 
         // Col 6: Type
         const isCheckIn = rec.type === 'check_in';
         ctx.fillStyle = isCheckIn ? '#059669' : '#dc2626';
-        ctx.font = 'bold 16px Kanit, "Noto Sans Thai", sans-serif';
+        ctx.font = 'bold 16px Kanit, "Noto Sans Thai", "Sarabun", "Thonburi", "Leelawadee UI", "Segoe UI", sans-serif';
         ctx.textAlign = 'center';
         ctx.fillText(isCheckIn ? 'เข้างาน' : 'ออกงาน', rx + cols[5].width / 2, rowY + 46);
         ctx.textAlign = 'left';
@@ -356,7 +417,7 @@ export async function exportToPDF(
 
         // Col 7: Location + GPS Coords
         ctx.fillStyle = '#0f172a';
-        ctx.font = '14px Kanit, "Noto Sans Thai", sans-serif';
+        ctx.font = '14px Kanit, "Noto Sans Thai", "Sarabun", "Thonburi", "Leelawadee UI", "Segoe UI", sans-serif';
         ctx.fillText(truncateTextToFit(ctx, rec.locationName || '-', cols[6].width - 24), rx + 12, rowY + 34);
         ctx.fillStyle = '#0369a1';
         ctx.font = '14px monospace';
@@ -367,7 +428,7 @@ export async function exportToPDF(
 
         // Col 8: Note
         ctx.fillStyle = '#475569';
-        ctx.font = '14px Kanit, "Noto Sans Thai", sans-serif';
+        ctx.font = '14px Kanit, "Noto Sans Thai", "Sarabun", "Thonburi", "Leelawadee UI", "Segoe UI", sans-serif';
         ctx.fillText(truncateTextToFit(ctx, rec.note || '-', cols[7].width - 20), rx + 12, rowY + 46);
 
         // Draw vertical grid separators
@@ -387,7 +448,7 @@ export async function exportToPDF(
     if (pageIdx === totalPages - 1) {
       const footY = PAGE_H - MARGIN - 65;
       ctx.fillStyle = '#334155';
-      ctx.font = '15px Kanit, "Noto Sans Thai", sans-serif';
+      ctx.font = '15px Kanit, "Noto Sans Thai", "Sarabun", "Thonburi", "Leelawadee UI", "Segoe UI", sans-serif';
       const sigPositions = [MARGIN + 150, PAGE_W / 2, PAGE_W - MARGIN - 150];
       const sigLabels = ['( ผู้จัดทำรายงาน )', '( หัวหน้าแผนก / ฝ่าย )', '( ผู้ดูแลระบบ / Admin )'];
       sigPositions.forEach((sx, idx) => {
@@ -409,7 +470,8 @@ export async function exportToPDF(
 }
 
 export function printAttendanceReport(records: AttendanceRecord[], title = 'รายงานการลงเวลาเข้า-ออกงาน') {
-  const filename = `รายงานการลงเวลา_${new Date().toISOString().split('T')[0]}.pdf`;
+  const filename = `รายงานการลงเวลา_${getThaiDateTime().dateStr}.pdf`;
   void exportToPDF(records, filename, title);
 }
+
 

@@ -628,6 +628,7 @@ export async function saveUserToFirestore(
         ? String(userData.password).trim()
         : existing?.password || '123456';
 
+    const nowIso = new Date().toISOString();
     const fullDoc: User = sanitizeForFirestore({
       id: userId,
       username: cleanUsername,
@@ -642,7 +643,8 @@ export async function saveUserToFirestore(
       phoneNumber: String(userData.phoneNumber ?? existing?.phoneNumber ?? '').trim(),
       employeeCode: String(userData.employeeCode ?? existing?.employeeCode ?? `EMP-${Date.now().toString().slice(-4)}`).trim(),
       status: (userData.status ?? existing?.status ?? 'active') as User['status'],
-      createdAt: existing?.createdAt || new Date().toISOString(),
+      createdAt: existing?.createdAt || nowIso,
+      updatedAt: nowIso,
     });
 
     await withTimeout(setDoc(doc(db, 'users', userId), fullDoc), 8000);
@@ -660,6 +662,7 @@ export async function saveUserToFirestore(
             userRole: fullDoc.role,
             departmentId: fullDoc.departmentId,
             departmentName: fullDoc.departmentName,
+            updatedAt: nowIso,
           });
           updates.push(withTimeout(setDoc(doc(db, 'attendance', rec.id), updatedRec), 6000));
         }
@@ -711,6 +714,7 @@ export async function resetUserPasswordInFirestore(id: string, newPassword: stri
     const updated = sanitizeForFirestore({
       ...(snap.data() as User),
       password: String(newPassword).trim(),
+      updatedAt: new Date().toISOString(),
     });
     await withTimeout(setDoc(doc(db, 'users', id), updated), 7000);
     await bumpFirestoreSyncMeta();
@@ -738,11 +742,16 @@ export async function batchImportUsersToFirestore(
 
     let importedCount = 0;
     let updatedCount = 0;
+    const nowIso = new Date().toISOString();
+    const touchedUsersMap = new Map<string, User>();
 
     for (const u of incomingUsers) {
       if (!u.fullName || !u.username) continue;
+      const cleanUname = normalizeIdentifierText(u.username).toLowerCase();
       const existing = existingUsers.find(
-        (ex) => ex.username.toLowerCase() === String(u.username).trim().toLowerCase()
+        (ex) =>
+          (u.id && ex.id === u.id) ||
+          normalizeIdentifierText(ex.username).toLowerCase() === cleanUname
       );
       const deptId = u.departmentId || existing?.departmentId || 'dep_ems_rescue';
       const dept =
@@ -753,21 +762,25 @@ export async function batchImportUsersToFirestore(
         const updatedDoc: User = sanitizeForFirestore({
           ...existing,
           fullName: String(u.fullName).trim(),
-          position: u.position || existing.position,
-          phoneNumber: u.phoneNumber || existing.phoneNumber,
+          position: u.position !== undefined ? String(u.position).trim() : existing.position,
+          phoneNumber: u.phoneNumber !== undefined ? String(u.phoneNumber).trim() : existing.phoneNumber,
           employeeCode: u.employeeCode || existing.employeeCode,
           departmentId: deptId,
           departmentName: dept ? dept.name : u.departmentName || existing.departmentName,
           role: (u.role || existing.role) as User['role'],
+          assignedLocationId: u.assignedLocationId !== undefined ? u.assignedLocationId : existing.assignedLocationId || '',
+          assignedLocationName: u.assignedLocationName !== undefined ? u.assignedLocationName : existing.assignedLocationName || '',
+          updatedAt: nowIso,
         });
         await withTimeout(setDoc(doc(db, 'users', existing.id), updatedDoc), 6000);
+        touchedUsersMap.set(existing.id, updatedDoc);
         updatedCount++;
       } else {
-        const newId = `usr_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+        const newId = u.id || `usr_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
         const newDoc: User = sanitizeForFirestore({
           id: newId,
-          username: String(u.username).trim(),
-          password: String(u.password || '123456').trim(),
+          username: cleanUname,
+          password: normalizePasswordText(u.password || '123456') || '123456',
           fullName: String(u.fullName).trim(),
           role: (u.role || 'employee') as User['role'],
           departmentId: deptId,
@@ -777,12 +790,43 @@ export async function batchImportUsersToFirestore(
           assignedLocationName: u.assignedLocationName || '',
           phoneNumber: u.phoneNumber || '',
           employeeCode: u.employeeCode || `EMP-${existingUsers.length + importedCount + 1}`,
-          status: 'active',
-          createdAt: new Date().toISOString(),
+          status: u.status === 'inactive' ? 'inactive' : 'active',
+          createdAt: nowIso,
+          updatedAt: nowIso,
         });
         await withTimeout(setDoc(doc(db, 'users', newId), newDoc), 6000);
         existingUsers.push(newDoc);
         importedCount++;
+      }
+    }
+
+    if (touchedUsersMap.size > 0) {
+      const attSnap = await withTimeout(getDocs(collection(db, 'attendance')), 8000).catch(() => null);
+      if (attSnap) {
+        const attTasks: Promise<void>[] = [];
+        attSnap.forEach((d) => {
+          const rec = d.data() as AttendanceRecord;
+          const u = touchedUsersMap.get(rec.userId);
+          if (u) {
+            attTasks.push(
+              withTimeout(
+                setDoc(
+                  doc(db, 'attendance', rec.id),
+                  sanitizeForFirestore({
+                    ...rec,
+                    userName: u.fullName,
+                    userRole: u.role,
+                    departmentId: u.departmentId,
+                    departmentName: u.departmentName,
+                    updatedAt: nowIso,
+                  })
+                ),
+                6000
+              )
+            );
+          }
+        });
+        if (attTasks.length > 0) await Promise.all(attTasks);
       }
     }
 
@@ -827,6 +871,7 @@ export async function saveDepartmentToFirestore(
       throw new Error('กรุณาระบุชื่อและรหัสแผนก');
     }
 
+    const nowIso = new Date().toISOString();
     const deptId = existing?.id || deptData.id || `dep_${Date.now()}`;
     const savedDept: Department = sanitizeForFirestore({
       id: deptId,
@@ -842,6 +887,7 @@ export async function saveDepartmentToFirestore(
         deptData.notifyOnCheckIn !== undefined ? deptData.notifyOnCheckIn : existing?.notifyOnCheckIn ?? true,
       notifyOnCheckOut:
         deptData.notifyOnCheckOut !== undefined ? deptData.notifyOnCheckOut : existing?.notifyOnCheckOut ?? true,
+      updatedAt: nowIso,
     });
 
     await withTimeout(setDoc(doc(db, 'departments', deptId), savedDept), 7000);
@@ -857,19 +903,19 @@ export async function saveDepartmentToFirestore(
       usersSnap.forEach((d) => {
         const u = d.data() as User;
         if (u.departmentId === deptId) {
-          tasks.push(withTimeout(setDoc(doc(db, 'users', u.id), sanitizeForFirestore({ ...u, departmentName: savedDept.name })), 6000));
+          tasks.push(withTimeout(setDoc(doc(db, 'users', u.id), sanitizeForFirestore({ ...u, departmentName: savedDept.name, updatedAt: nowIso })), 6000));
         }
       });
       locsSnap.forEach((d) => {
         const l = d.data() as WorkLocation;
         if (l.departmentId === deptId) {
-          tasks.push(withTimeout(setDoc(doc(db, 'locations', l.id), sanitizeForFirestore({ ...l, departmentName: savedDept.name })), 6000));
+          tasks.push(withTimeout(setDoc(doc(db, 'locations', l.id), sanitizeForFirestore({ ...l, departmentName: savedDept.name, updatedAt: nowIso })), 6000));
         }
       });
       attSnap.forEach((d) => {
         const a = d.data() as AttendanceRecord;
         if (a.departmentId === deptId) {
-          tasks.push(withTimeout(setDoc(doc(db, 'attendance', a.id), sanitizeForFirestore({ ...a, departmentName: savedDept.name })), 6000));
+          tasks.push(withTimeout(setDoc(doc(db, 'attendance', a.id), sanitizeForFirestore({ ...a, departmentName: savedDept.name, updatedAt: nowIso })), 6000));
         }
       });
       if (tasks.length > 0) await Promise.all(tasks);
@@ -925,6 +971,7 @@ export async function saveLocationToFirestore(
     const finalDeptId = locData.departmentId ?? existing?.departmentId ?? 'all';
     const matchedDept = depts.find((d) => d.id === finalDeptId);
 
+    const nowIso = new Date().toISOString();
     const locId = existing?.id || locData.id || `loc_${Date.now()}`;
     const savedLoc: WorkLocation = sanitizeForFirestore({
       id: locId,
@@ -937,7 +984,8 @@ export async function saveLocationToFirestore(
       departmentId: finalDeptId,
       departmentName: finalDeptId === 'all' ? 'ทุกแผนก' : matchedDept ? matchedDept.name : existing?.departmentName || 'ทุกแผนก',
       isActive: locData.isActive !== undefined ? locData.isActive : existing?.isActive ?? true,
-      createdAt: existing?.createdAt || new Date().toISOString(),
+      createdAt: existing?.createdAt || nowIso,
+      updatedAt: nowIso,
     });
 
     await withTimeout(setDoc(doc(db, 'locations', locId), savedLoc), 7000);
@@ -952,13 +1000,13 @@ export async function saveLocationToFirestore(
       usersSnap.forEach((d) => {
         const u = d.data() as User;
         if (u.assignedLocationId === locId) {
-          tasks.push(withTimeout(setDoc(doc(db, 'users', u.id), sanitizeForFirestore({ ...u, assignedLocationName: savedLoc.name })), 6000));
+          tasks.push(withTimeout(setDoc(doc(db, 'users', u.id), sanitizeForFirestore({ ...u, assignedLocationName: savedLoc.name, updatedAt: nowIso })), 6000));
         }
       });
       attSnap.forEach((d) => {
         const a = d.data() as AttendanceRecord;
         if (a.workLocationId === locId) {
-          tasks.push(withTimeout(setDoc(doc(db, 'attendance', a.id), sanitizeForFirestore({ ...a, workLocationName: savedLoc.name })), 6000));
+          tasks.push(withTimeout(setDoc(doc(db, 'attendance', a.id), sanitizeForFirestore({ ...a, workLocationName: savedLoc.name, updatedAt: nowIso })), 6000));
         }
       });
       if (tasks.length > 0) await Promise.all(tasks);
@@ -974,6 +1022,7 @@ export async function saveLocationToFirestore(
 export async function deleteLocationFromFirestore(id: string): Promise<void> {
   const path = `locations/${id}`;
   try {
+    const nowIso = new Date().toISOString();
     await withTimeout(deleteDoc(doc(db, 'locations', id)), 7000);
     const usersSnap = await withTimeout(getDocs(collection(db, 'users')), 7000);
     const updates: Promise<void>[] = [];
@@ -984,7 +1033,7 @@ export async function deleteLocationFromFirestore(id: string): Promise<void> {
           withTimeout(
             setDoc(
               doc(db, 'users', u.id),
-              sanitizeForFirestore({ ...u, assignedLocationId: '', assignedLocationName: '' })
+              sanitizeForFirestore({ ...u, assignedLocationId: '', assignedLocationName: '', updatedAt: nowIso })
             ),
             6000
           )
@@ -1093,6 +1142,7 @@ export async function updateAttendanceInFirestore(
       date: nextDate,
       time: nextTime,
       timestamp: nextTimestamp,
+      updatedAt: new Date().toISOString(),
     });
 
     await withTimeout(setDoc(doc(db, 'attendance', id), updatedRecord), 8000);
@@ -1131,7 +1181,7 @@ export async function cleanDemoAttendanceInFirestore(): Promise<{
       const r = d.data() as AttendanceRecord;
       const isDemo =
         r.userId === 'usr_somchai' ||
-        (r.userName && r.userName.includes('สมชาย')) ||
+        r.userName === 'สมชาย ใจดี' ||
         r.id === 'att_1793678354265_gye2' ||
         r.id === 'att_1791596015445_jm7c';
       if (isDemo) {
@@ -1180,6 +1230,7 @@ export async function updateSettingsInFirestore(
     const merged: SystemSettings = sanitizeForFirestore({
       ...existing,
       ...settings,
+      updatedAt: new Date().toISOString(),
     });
     await withTimeout(setDoc(doc(db, 'settings', 'global'), merged), 7000);
     await bumpFirestoreSyncMeta();

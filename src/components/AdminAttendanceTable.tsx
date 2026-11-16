@@ -30,7 +30,8 @@ import {
   FileText,
 } from 'lucide-react';
 import { api } from '../services/api';
-import { exportToExcel, exportToCSV, exportToPDF } from '../utils/export';
+import { exportToExcel, exportToCSV, exportToPDF, triggerBrowserDownload } from '../utils/export';
+import { getThaiDateTime, getThaiDateOffsetStr } from '../utils/thaiTime';
 
 interface AdminAttendanceTableProps {
   records: AttendanceRecord[];
@@ -102,12 +103,13 @@ export const AdminAttendanceTable: React.FC<AdminAttendanceTableProps> = ({
   const [isConfirmingAction, setIsConfirmingAction] = useState(false);
 
   // Manual Attendance Record Modal (Admin records for employee or volunteer)
+  const initialThai = getThaiDateTime();
   const [showManualModal, setShowManualModal] = useState(false);
   const [manualForm, setManualForm] = useState({
     userId: '',
     type: 'check_in' as 'check_in' | 'check_out',
-    date: new Date().toISOString().split('T')[0],
-    time: new Date().toTimeString().split(' ')[0],
+    date: initialThai.dateStr,
+    time: initialThai.timeStr,
     workLocationId: '',
     customLocationName: '',
     note: '',
@@ -115,12 +117,12 @@ export const AdminAttendanceTable: React.FC<AdminAttendanceTableProps> = ({
   const [isSubmittingManual, setIsSubmittingManual] = useState(false);
 
   const handleOpenManualModal = (defaultType: 'check_in' | 'check_out' = 'check_in') => {
-    const curNow = new Date();
+    const curThai = getThaiDateTime();
     setManualForm({
       userId: users.length > 0 ? users[0].id : '',
       type: defaultType,
-      date: curNow.toISOString().split('T')[0],
-      time: curNow.toTimeString().split(' ')[0],
+      date: curThai.dateStr,
+      time: curThai.timeStr,
       workLocationId: workLocations.length > 0 ? workLocations[0].id : '',
       customLocationName: '',
       note: '',
@@ -150,7 +152,8 @@ export const AdminAttendanceTable: React.FC<AdminAttendanceTableProps> = ({
 
     setIsSubmittingManual(true);
     try {
-      const customIso = `${manualForm.date}T${manualForm.time}`;
+      const normalizedTime = manualForm.time.trim().length === 5 ? `${manualForm.time.trim()}:00` : manualForm.time.trim();
+      const customIso = `${manualForm.date}T${normalizedTime}+07:00`;
       await api.recordAttendance({
         userId: targetUser.id,
         type: manualForm.type,
@@ -178,11 +181,10 @@ export const AdminAttendanceTable: React.FC<AdminAttendanceTableProps> = ({
     }
   };
 
-  // Compute filtered records
-  const now = new Date();
-  const todayStr = now.toISOString().split('T')[0];
-  const sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 3600 * 1000).toISOString().split('T')[0];
-  const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 3600 * 1000).toISOString().split('T')[0];
+  // Compute filtered records in Bangkok GMT+7
+  const todayStr = getThaiDateTime().dateStr;
+  const sevenDaysAgo = getThaiDateOffsetStr(7);
+  const thirtyDaysAgo = getThaiDateOffsetStr(30);
 
   const filteredRecords = records.filter((rec) => {
     // Search
@@ -319,17 +321,10 @@ export const AdminAttendanceTable: React.FC<AdminAttendanceTableProps> = ({
     setIsBackingUp(true);
     try {
       const res = await api.backupAttendanceSnapshot();
-      // Also download full JSON to browser
-      const dateTag = new Date().toISOString().slice(0, 10);
+      // Also download full JSON to browser cleanly across iOS & Android
+      const dateTag = getThaiDateTime().dateStr;
       const blob = new Blob([JSON.stringify(records, null, 2)], { type: 'application/json' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `attendance-records-backup-${dateTag}.json`;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
+      triggerBrowserDownload(blob, `attendance-records-backup-${dateTag}.json`);
 
       const cloudNote = res.firebaseStored
         ? ` และจัดเก็บลง Firebase (${res.projectId || 'smart-time-ca6f9'})`
@@ -353,7 +348,7 @@ export const AdminAttendanceTable: React.FC<AdminAttendanceTableProps> = ({
     setIsExportingPdf(true);
     try {
       const targetRecords = filteredRecords.length > 0 ? filteredRecords : records;
-      const filename = `รายงานการลงเวลา_${new Date().toISOString().split('T')[0]}.pdf`;
+      const filename = `รายงานการลงเวลา_${getThaiDateTime().dateStr}.pdf`;
       await exportToPDF(targetRecords, filename, 'รายงานการลงเวลาเข้า-ออกงาน (Smart Time)');
       setFeedbackToast({
         type: 'success',
@@ -371,24 +366,22 @@ export const AdminAttendanceTable: React.FC<AdminAttendanceTableProps> = ({
   };
 
   const handleExportExcelClick = () => {
-    const filename = `รายงานการลงเวลา_${new Date().toISOString().split('T')[0]}.xlsx`;
+    const filename = `รายงานการลงเวลา_${getThaiDateTime().dateStr}.xlsx`;
     exportToExcel(filteredRecords.length > 0 ? filteredRecords : records, filename);
   };
 
   const handleExportCSVClick = () => {
-    const filename = `รายงานการลงเวลา_${new Date().toISOString().split('T')[0]}.csv`;
+    const filename = `รายงานการลงเวลา_${getThaiDateTime().dateStr}.csv`;
     exportToCSV(filteredRecords.length > 0 ? filteredRecords : records, filename);
   };
 
   const handleDownloadPhoto = (rec: AttendanceRecord) => {
     if (!rec.photo) return;
     const safeName = (rec.userName || 'photo').replace(/[^a-zA-Z0-9ก-๙_-]/g, '_');
-    const a = document.createElement('a');
-    a.href = rec.photo;
-    a.download = `SmartTime-${safeName}-${rec.date || 'capture'}-${(rec.time || '').replace(/:/g, '')}.jpg`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
+    triggerBrowserDownload(
+      rec.photo,
+      `SmartTime-${safeName}-${rec.date || 'capture'}-${(rec.time || '').replace(/:/g, '')}.jpg`
+    );
   };
 
   const handleRestoreSubmit = async (e: React.FormEvent) => {
@@ -1029,7 +1022,7 @@ export const AdminAttendanceTable: React.FC<AdminAttendanceTableProps> = ({
 
             <div className="p-3.5 sm:px-6 bg-slate-50 border-t border-slate-100 flex flex-wrap items-center justify-between gap-2">
               <div className="text-xs text-slate-500 font-mono">
-                GPS: {selectedPhotoRecord.latitude?.toFixed(6)}, {selectedPhotoRecord.longitude?.toFixed(6)}
+                GPS: {Number.isFinite(Number(selectedPhotoRecord.latitude)) ? Number(selectedPhotoRecord.latitude).toFixed(6) : '-'}, {Number.isFinite(Number(selectedPhotoRecord.longitude)) ? Number(selectedPhotoRecord.longitude).toFixed(6) : '-'}
               </div>
               <div className="flex items-center gap-2">
                 <button
@@ -1242,11 +1235,11 @@ export const AdminAttendanceTable: React.FC<AdminAttendanceTableProps> = ({
                   <button
                     type="button"
                     onClick={() => {
-                      const cur = new Date();
+                      const curThai = getThaiDateTime();
                       setManualForm((prev) => ({
                         ...prev,
-                        date: cur.toISOString().split('T')[0],
-                        time: cur.toTimeString().split(' ')[0],
+                        date: curThai.dateStr,
+                        time: curThai.timeStr,
                       }));
                     }}
                     className="text-[11px] text-emerald-700 hover:text-emerald-800 font-bold flex items-center gap-1 hover:underline cursor-pointer"

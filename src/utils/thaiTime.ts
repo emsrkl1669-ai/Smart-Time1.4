@@ -152,3 +152,15 @@ export function formatThaiDateOnly(dateStrYYYYMMDD: string): string {
     return dateStrYYYYMMDD;
   }
 }
+
+export function getThaiDateOffsetStr(daysAgo = 0): string {
+  const now = getNowWithOffset();
+  const target = new Date(now.getTime() - daysAgo * 24 * 60 * 60 * 1000);
+  return getThaiDateTime(target).dateStr;
+}
+
+export function getThaiMonthStartStr(): string {
+  const todayStr = getThaiDateTime().dateStr;
+  return `${todayStr.slice(0, 7)}-01`;
+}
+

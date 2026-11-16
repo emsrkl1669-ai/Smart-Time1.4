@@ -20,7 +20,8 @@ import {
 } from 'lucide-react';
 import { api, getOfflineQueue, freshFetch } from '../services/api';
 import { AttendanceRecord } from '../types';
-import { exportToPDF } from '../utils/export';
+import { exportToPDF, triggerBrowserDownload } from '../utils/export';
+import { getThaiDateTime } from '../utils/thaiTime';
 
 interface DatabaseShieldModalProps {
   isOpen: boolean;
@@ -110,19 +111,12 @@ export const DatabaseShieldModal: React.FC<DatabaseShieldModalProps> = ({
       }
       const jsonBlob = await exportRes.blob();
       const nowStr = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
-      const url = URL.createObjectURL(jsonBlob);
-      const link = document.createElement('a');
-      link.href = url;
-      link.download = `smart-time-backup-${nowStr}.json`;
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-      URL.revokeObjectURL(url);
+      triggerBrowserDownload(jsonBlob, `smart-time-backup-${nowStr}.json`);
 
       await loadStatus();
       const cloudMsg = res.firebaseStored
         ? `จัดเก็บลง Firebase (${res.projectId || 'smart-time-ca6f9'}) และดาวน์โหลดไฟล์ JSON เรียบร้อยแล้ว`
-        : 'สร้างจุดสำรองและดาวน์โหลดไฟล์ JSON เรียบร้อยแล้ว';
+        : 'สร้างจุดสำรองในฐานข้อมูลกลางและดาวน์โหลดไฟล์ JSON เรียบร้อยแล้ว (Cloud Firestore ถึงโควตาชั่วคราว)';
       setActionFeedback(cloudMsg);
     } catch (err: any) {
       setActionFeedback(err?.message || 'ไม่สามารถสำรองและดาวน์โหลดไฟล์ JSON ได้');
@@ -137,7 +131,7 @@ export const DatabaseShieldModal: React.FC<DatabaseShieldModalProps> = ({
     setActionFeedback(null);
     try {
       const recs = attendanceRecords ?? (await api.getAttendance());
-      const dateStr = new Date().toISOString().split('T')[0];
+      const dateStr = getThaiDateTime().dateStr;
       await exportToPDF(
         recs,
         `SmartTime-Backup-Report-${dateStr}.pdf`,
@@ -338,12 +332,22 @@ export const DatabaseShieldModal: React.FC<DatabaseShieldModalProps> = ({
                   <Server className="w-4 h-4" />
                 </div>
                 <div>
-                  <h4 className="text-xs font-bold text-slate-900 flex items-center gap-1.5">
+                  <h4 className="text-xs font-bold text-slate-900 flex items-center gap-1.5 flex-wrap">
                     <span>Google Cloud Firestore</span>
-                    <span className="text-[10px] bg-emerald-100 text-emerald-800 font-bold px-2 py-0.5 rounded-full border border-emerald-300 flex items-center gap-1">
-                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-ping"></span>
-                      ONLINE & CONNECTED
-                    </span>
+                    {firebaseStatus?.quotaLimited ? (
+                      <span className="text-[10px] bg-amber-100 text-amber-800 font-bold px-2 py-0.5 rounded-full border border-amber-300">
+                        QUOTA COOLDOWN • CENTRAL DB ACTIVE
+                      </span>
+                    ) : firebaseStatus?.connected === false ? (
+                      <span className="text-[10px] bg-slate-100 text-slate-700 font-bold px-2 py-0.5 rounded-full border border-slate-300">
+                        LOCAL CENTRAL DB
+                      </span>
+                    ) : (
+                      <span className="text-[10px] bg-emerald-100 text-emerald-800 font-bold px-2 py-0.5 rounded-full border border-emerald-300 flex items-center gap-1">
+                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-ping"></span>
+                        ONLINE & CONNECTED
+                      </span>
+                    )}
                   </h4>
                   <p className="text-[10px] text-slate-500 font-mono mt-0.5">
                     Project: <strong className="text-slate-800">smart-time-ca6f9</strong> • Database: <strong className="text-slate-800">ai-studio-smarttime-c0e0d0c3-6e74-4849-a586-d0b8bd0fbf47</strong>
@@ -353,7 +357,9 @@ export const DatabaseShieldModal: React.FC<DatabaseShieldModalProps> = ({
             </div>
 
             <p className="text-[11px] text-slate-600 leading-relaxed">
-              เชื่อมต่อฐานข้อมูล Google Cloud Firestore สำเร็จแล้ว ข้อมูลพนักงานและอาสาสมัครครบ 57 ท่าน, จุดปฏิบัติงาน 5 จุด, และประวัติการลงเวลาทั้งหมดจะถูกจัดเก็บลง Cloud Database ทันที ป้องกันข้อมูลสูญหาย 100% แม้ปิดเครื่องหรือเปลี่ยนอุปกรณ์
+              {firebaseStatus?.quotaLimited
+                ? 'ขณะนี้ Cloud Firestore ถึงขีดจำกัดโควตาฟรีประจำวัน ระบบทำงานผ่านฐานข้อมูลกลางบนเซิร์ฟเวอร์อย่างต่อเนื่อง 100% เพื่อป้องกันข้อมูลสูญหาย และจะซิงค์ขึ้น Cloud อัตโนมัติเมื่อโควตารีเซ็ต'
+                : 'เชื่อมต่อฐานข้อมูล Google Cloud Firestore และฐานข้อมูลกลางสำเร็จแล้ว ข้อมูลพนักงาน อาสาสมัคร จุดปฏิบัติงาน และประวัติการลงเวลาทั้งหมดถูกจัดเก็บอย่างปลอดภัย ป้องกันข้อมูลสูญหาย 100%'}
             </p>
 
             <button

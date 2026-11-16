@@ -14,6 +14,7 @@ export interface WorkLocation {
   departmentName?: string;
   isActive: boolean;
   createdAt: string;
+  updatedAt?: string;
 }
 
 export interface User {
@@ -32,6 +33,7 @@ export interface User {
   avatarUrl?: string;
   status: 'active' | 'inactive';
   createdAt: string;
+  updatedAt?: string;
 }
 
 export interface Department {
@@ -44,6 +46,7 @@ export interface Department {
   notifyOnCheckIn: boolean;
   notifyOnCheckOut: boolean;
   memberCount?: number;
+  updatedAt?: string;
 }
 
 export interface AttendanceRecord {
@@ -73,6 +76,7 @@ export interface AttendanceRecord {
   lineTargetDepartment?: string;
   ipAddress?: string;
   deviceOs?: 'ios' | 'android' | 'desktop' | 'unknown';
+  updatedAt?: string;
 }
 
 export interface SystemSettings {
@@ -85,6 +89,7 @@ export interface SystemSettings {
   requirePhotoOnCheckIn: boolean;
   requireLocationOnCheckIn: boolean;
   enforceLocationGeofence?: boolean; // บังคับต้องอยู่ในรัศมีจุดปฏิบัติงานหรือไม่
+  updatedAt?: string;
 }
 
 export interface LineNotificationLog {

@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import QRCode from 'qrcode';
 import { Smartphone, Share, PlusSquare, Download, Check, X, Apple, CheckCircle2, ShieldCheck, QrCode, Copy } from 'lucide-react';
+import { copyTextToClipboard, getPublicAppUrl } from '../services/api';
 
 interface MobileInstallPromptProps {
   isOpen: boolean;
@@ -20,7 +21,8 @@ export const MobileInstallPrompt: React.FC<MobileInstallPromptProps> = ({
 
   useEffect(() => {
     if (typeof window !== 'undefined') {
-      QRCode.toDataURL(window.location.origin, {
+      const publicUrl = getPublicAppUrl() || window.location.origin;
+      QRCode.toDataURL(publicUrl, {
         width: 260,
         margin: 2,
         color: { dark: '#0f172a', light: '#ffffff' },
@@ -37,9 +39,9 @@ export const MobileInstallPrompt: React.FC<MobileInstallPromptProps> = ({
     setIsIOS(iosMatch);
     setIsAndroid(androidMatch);
 
-    // Detect if already installed (standalone mode)
+    // Detect if already installed (standalone mode) safely across all iOS/Android WebView versions
     const isStandalone =
-      window.matchMedia('(display-mode: standalone)').matches ||
+      (typeof window.matchMedia === 'function' && window.matchMedia('(display-mode: standalone)').matches) ||
       (navigator as any).standalone === true;
     setIsInstalled(isStandalone);
 
@@ -120,8 +122,9 @@ export const MobileInstallPrompt: React.FC<MobileInstallPromptProps> = ({
                   </p>
                   <button
                     type="button"
-                    onClick={() => {
-                      navigator.clipboard.writeText(window.location.origin);
+                    onClick={async () => {
+                      const targetUrl = getPublicAppUrl() || window.location.origin;
+                      await copyTextToClipboard(targetUrl);
                       setCopied(true);
                       setTimeout(() => setCopied(false), 2000);
                     }}

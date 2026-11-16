@@ -143,6 +143,148 @@ async function firestoreUpdateSyncMeta() {
   });
 }
 
+interface DeletedTombstones {
+  users: Record<string, string>;
+  departments: Record<string, string>;
+  locations: Record<string, string>;
+  attendance: Record<string, string>;
+}
+
+function normalizeTombstones(raw?: Partial<DeletedTombstones> | null): DeletedTombstones {
+  return {
+    users: raw?.users && typeof raw.users === 'object' ? { ...raw.users } : {},
+    departments: raw?.departments && typeof raw.departments === 'object' ? { ...raw.departments } : {},
+    locations: raw?.locations && typeof raw.locations === 'object' ? { ...raw.locations } : {},
+    attendance: raw?.attendance && typeof raw.attendance === 'object' ? { ...raw.attendance } : {},
+  };
+}
+
+function getEntityTimestampMs(item: { updatedAt?: string; createdAt?: string; timestamp?: string } | null | undefined): number {
+  if (!item) return 0;
+  const t = Date.parse(item.updatedAt || item.createdAt || item.timestamp || '');
+  return Number.isFinite(t) ? t : 0;
+}
+
+function mergeEntitiesById<T extends { id: string; updatedAt?: string; createdAt?: string; timestamp?: string }>(
+  localItems: T[],
+  cloudItems: T[] | undefined,
+  tombstones: Record<string, string>,
+  preserveLocalFields?: (local: T, cloud: T) => T
+): { merged: T[]; changed: boolean } {
+  if (!cloudItems || !Array.isArray(cloudItems)) {
+    return { merged: localItems, changed: false };
+  }
+  const localMap = new Map<string, T>();
+  for (const item of localItems) {
+    if (item && item.id) localMap.set(item.id, item);
+  }
+  const cloudMap = new Map<string, T>();
+  for (const item of cloudItems) {
+    if (item && item.id) cloudMap.set(item.id, item);
+  }
+
+  let changed = false;
+  const resultMap = new Map<string, T>();
+
+  // 1. Keep all local items (merged with newer cloud edits if present)
+  for (const [id, localItem] of localMap.entries()) {
+    const cloudItem = cloudMap.get(id);
+    if (!cloudItem) {
+      resultMap.set(id, localItem);
+      continue;
+    }
+    const localTs = getEntityTimestampMs(localItem);
+    const cloudTs = getEntityTimestampMs(cloudItem);
+    if (cloudTs > localTs) {
+      const winner = preserveLocalFields ? preserveLocalFields(localItem, cloudItem) : { ...localItem, ...cloudItem };
+      resultMap.set(id, winner);
+      changed = true;
+    } else {
+      resultMap.set(id, { ...cloudItem, ...localItem });
+    }
+  }
+
+  // 2. Add cloud-only items unless explicitly deleted locally after cloud item timestamp
+  for (const [id, cloudItem] of cloudMap.entries()) {
+    if (resultMap.has(id)) continue;
+    const deletedAt = tombstones[id];
+    if (deletedAt) {
+      const delTs = Date.parse(deletedAt) || 0;
+      const cloudTs = getEntityTimestampMs(cloudItem);
+      if (cloudTs <= delTs) {
+        continue;
+      }
+    }
+    resultMap.set(id, cloudItem);
+    changed = true;
+  }
+
+  return { merged: Array.from(resultMap.values()), changed };
+}
+
+function mergeDatabaseWithCloud(targetDb: DatabaseData, cloudData: Partial<DatabaseData>): boolean {
+  const tombstones = normalizeTombstones(targetDb.deletedIds);
+  targetDb.deletedIds = tombstones;
+  let anyChanged = false;
+
+  if (cloudData.users && cloudData.users.length > 0) {
+    const res = mergeEntitiesById<User>(targetDb.users, cloudData.users, tombstones.users, (local, cloud) => ({
+      ...local,
+      ...cloud,
+      password: cloud.password && String(cloud.password).trim() !== '' ? cloud.password : local.password,
+    }));
+    if (res.changed) {
+      targetDb.users = res.merged;
+      anyChanged = true;
+    }
+  }
+
+  if (cloudData.departments && cloudData.departments.length > 0) {
+    const res = mergeEntitiesById<Department>(targetDb.departments, cloudData.departments, tombstones.departments);
+    if (res.changed) {
+      targetDb.departments = res.merged;
+      anyChanged = true;
+    }
+  }
+
+  if (cloudData.locations && cloudData.locations.length > 0) {
+    const res = mergeEntitiesById<WorkLocation>(targetDb.locations, cloudData.locations, tombstones.locations);
+    if (res.changed) {
+      targetDb.locations = res.merged;
+      anyChanged = true;
+    }
+  }
+
+  if (cloudData.attendance && cloudData.attendance.length > 0) {
+    const res = mergeEntitiesById<AttendanceRecord>(
+      targetDb.attendance,
+      cloudData.attendance,
+      tombstones.attendance,
+      (local, cloud) => ({
+        ...local,
+        ...cloud,
+        photo: cloud.photo && cloud.photo.length > 0 ? cloud.photo : local.photo,
+      })
+    );
+    if (res.changed) {
+      res.merged.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+      targetDb.attendance = res.merged;
+      anyChanged = true;
+    }
+  }
+
+  if (cloudData.settings) {
+    const localSettingsTs = Date.parse(targetDb.settings?.updatedAt || '') || 0;
+    const cloudSettingsTs = Date.parse(cloudData.settings?.updatedAt || '') || 0;
+    if (cloudSettingsTs > localSettingsTs) {
+      targetDb.settings = { ...targetDb.settings, ...cloudData.settings };
+      anyChanged = true;
+    }
+  }
+
+  return anyChanged;
+}
+
 async function syncFromFirestoreIfNewer(force = false): Promise<void> {
   if (!firestoreDb || isFirestoreQuotaActive()) return;
   if (inFlightCloudSync) {
@@ -165,13 +307,11 @@ async function syncFromFirestoreIfNewer(force = false): Promise<void> {
         if (remoteVer && (remoteVer > Math.max(dbVersion, lastHandledCloudVersion) || isRemoteClientWrite)) {
           const cloudData = await loadFromFirestore();
           if (cloudData) {
-            if (cloudData.users && cloudData.users.length > 0) db.users = cloudData.users;
-            if (cloudData.departments && cloudData.departments.length > 0) db.departments = cloudData.departments;
-            if (cloudData.locations && cloudData.locations.length > 0) db.locations = cloudData.locations;
-            if (cloudData.attendance) db.attendance = cloudData.attendance;
-            if (cloudData.settings) db.settings = { ...db.settings, ...cloudData.settings };
-            saveDatabase(db);
-            rewriteAttendanceArchive(db.attendance);
+            const changed = mergeDatabaseWithCloud(db, cloudData);
+            if (changed) {
+              saveDatabase(db);
+              rewriteAttendanceArchive(db.attendance);
+            }
             dbVersion = Math.max(Date.now(), remoteVer);
             persistLastHandledCloudVersion(remoteVer);
           }
@@ -200,42 +340,50 @@ interface AdminJournalEntry {
 }
 
 // Append-only journal for Admin mutations to guarantee they can NEVER revert or be lost
-async function appendToAdminJournal(action: AdminJournalEntry) {
+async function appendManyToAdminJournal(actions: AdminJournalEntry[]) {
+  if (!actions || actions.length === 0) return;
   try {
     if (!fs.existsSync(DATA_DIR)) {
       fs.mkdirSync(DATA_DIR, { recursive: true });
     }
-    fs.appendFileSync(ADMIN_JOURNAL_FILE, JSON.stringify(action) + '\n', 'utf-8');
+    const lines = actions.map((a) => JSON.stringify(a)).join('\n') + '\n';
+    fs.appendFileSync(ADMIN_JOURNAL_FILE, lines, 'utf-8');
     dbVersion = Date.now();
 
-    // Mirror to Cloud Firestore immediately (smart-time-ca6f9)
-    if (firestoreDb) {
-      if (action.entity === 'user') {
-        if (action.op === 'delete' && action.id) {
-          await firestoreDelete('users', action.id);
-        } else if (action.data && (action.id || action.data.id)) {
-          await firestoreSet('users', action.id || action.data.id, action.data);
+    if (firestoreDb && !isFirestoreQuotaActive()) {
+      for (const action of actions) {
+        if (isFirestoreQuotaActive()) break;
+        if (action.entity === 'user') {
+          if (action.op === 'delete' && action.id) {
+            await firestoreDelete('users', action.id);
+          } else if (action.data && (action.id || action.data.id)) {
+            await firestoreSet('users', action.id || action.data.id, action.data);
+          }
+        } else if (action.entity === 'location') {
+          if (action.op === 'delete' && action.id) {
+            await firestoreDelete('locations', action.id);
+          } else if (action.data && (action.id || action.data.id)) {
+            await firestoreSet('locations', action.id || action.data.id, action.data);
+          }
+        } else if (action.entity === 'department') {
+          if (action.op === 'delete' && action.id) {
+            await firestoreDelete('departments', action.id);
+          } else if (action.data && (action.id || action.data.id)) {
+            await firestoreSet('departments', action.id || action.data.id, action.data);
+          }
+        } else if (action.entity === 'settings' && action.data) {
+          await firestoreSet('settings', 'global', action.data);
         }
-      } else if (action.entity === 'location') {
-        if (action.op === 'delete' && action.id) {
-          await firestoreDelete('locations', action.id);
-        } else if (action.data && (action.id || action.data.id)) {
-          await firestoreSet('locations', action.id || action.data.id, action.data);
-        }
-      } else if (action.entity === 'department') {
-        if (action.op === 'delete' && action.id) {
-          await firestoreDelete('departments', action.id);
-        } else if (action.data && (action.id || action.data.id)) {
-          await firestoreSet('departments', action.id || action.data.id, action.data);
-        }
-      } else if (action.entity === 'settings' && action.data) {
-        await firestoreSet('settings', 'global', action.data);
       }
       await firestoreUpdateSyncMeta();
     }
   } catch (err) {
     console.error('Failed to append to admin journal:', err);
   }
+}
+
+async function appendToAdminJournal(action: AdminJournalEntry) {
+  await appendManyToAdminJournal([action]);
 }
 
 function loadAdminJournal(): AdminJournalEntry[] {
@@ -277,8 +425,10 @@ function rewriteAttendanceArchive(records: AttendanceRecord[]) {
     if (!fs.existsSync(DATA_DIR)) {
       fs.mkdirSync(DATA_DIR, { recursive: true });
     }
+    const tmpArchive = `${ATTENDANCE_ARCHIVE_FILE}.tmp`;
     const content = records.map((r) => JSON.stringify(r)).join('\n') + (records.length > 0 ? '\n' : '');
-    fs.writeFileSync(ATTENDANCE_ARCHIVE_FILE, content, 'utf-8');
+    fs.writeFileSync(tmpArchive, content, 'utf-8');
+    fs.renameSync(tmpArchive, ATTENDANCE_ARCHIVE_FILE);
   } catch (err) {
     console.error('Failed to rewrite attendance archive:', err);
   }
@@ -313,6 +463,8 @@ interface DatabaseData {
   attendance: AttendanceRecord[];
   settings: SystemSettings;
   lineLogs: LineNotificationLog[];
+  deletedIds?: DeletedTombstones;
+  lastSavedAt?: string;
 }
 
 // Initial Seed Data - 9 Required Organization Departments
@@ -561,6 +713,9 @@ function saveDatabase(data: DatabaseData) {
       return;
     }
 
+    data.deletedIds = normalizeTombstones(data.deletedIds);
+    data.lastSavedAt = new Date().toISOString();
+
     const payload = JSON.stringify(data, null, 2);
     if (!payload || payload.length < 50) {
       console.error('CRITICAL: saveDatabase aborted - JSON payload unexpectedly small or empty!');
@@ -613,52 +768,79 @@ function saveDatabase(data: DatabaseData) {
 }
 
 // ================= CLOUD FIRESTORE MASTER SYNC =================
-async function syncAllToFirestore(data: DatabaseData) {
-  if (!firestoreDb) return;
+async function syncAllToFirestore(
+  data: DatabaseData
+): Promise<{ synced: boolean; quotaLimited: boolean; writtenCount: number }> {
+  if (!firestoreDb) return { synced: false, quotaLimited: false, writtenCount: 0 };
+  if (isFirestoreQuotaActive()) return { synced: false, quotaLimited: true, writtenCount: 0 };
   try {
     console.log('☁️ Syncing full organization data to Cloud Firestore...');
+    let writtenCount = 0;
+
+    const writeOrAbort = async (col: string, id: string, docData: any): Promise<boolean> => {
+      if (isFirestoreQuotaActive()) return false;
+      const ok = await firestoreSet(col, id, docData);
+      if (ok) writtenCount++;
+      return !isFirestoreQuotaActive();
+    };
+
     for (const u of data.users) {
-      await firestoreSet('users', u.id, u);
+      if (!(await writeOrAbort('users', u.id, u))) break;
     }
     for (const d of data.departments) {
-      await firestoreSet('departments', d.id, d);
+      if (!(await writeOrAbort('departments', d.id, d))) break;
     }
     for (const l of data.locations) {
-      await firestoreSet('locations', l.id, l);
+      if (!(await writeOrAbort('locations', l.id, l))) break;
     }
     for (const a of data.attendance) {
-      await firestoreSet('attendance', a.id, a);
+      if (!(await writeOrAbort('attendance', a.id, a))) break;
     }
-    if (data.settings) {
-      await firestoreSet('settings', 'global', data.settings);
+    if (data.settings && !isFirestoreQuotaActive()) {
+      await writeOrAbort('settings', 'global', data.settings);
     }
     for (const log of data.lineLogs || []) {
       if (log?.id) {
-        await firestoreSet('lineLogs', log.id, log);
+        if (!(await writeOrAbort('lineLogs', log.id, log))) break;
       }
     }
-    await firestoreSet('_meta', 'sync', {
-      version: dbVersion,
-      lastBackupTimestamp,
-      counts: {
-        users: data.users.length,
-        locations: data.locations.length,
-        departments: data.departments.length,
-        attendance: data.attendance.length,
-      },
-      updatedAt: new Date().toISOString(),
-    });
+    if (!isFirestoreQuotaActive()) {
+      await writeOrAbort('_meta', 'sync', {
+        version: dbVersion,
+        lastBackupTimestamp,
+        counts: {
+          users: data.users.length,
+          locations: data.locations.length,
+          departments: data.departments.length,
+          attendance: data.attendance.length,
+        },
+        updatedAt: new Date().toISOString(),
+      });
+    }
+
+    if (isFirestoreQuotaActive()) {
+      return { synced: false, quotaLimited: true, writtenCount };
+    }
     console.log(`☁️ Cloud Firestore sync completed: ${data.users.length} users, ${data.locations.length} locations, ${data.attendance.length} records.`);
+    return { synced: true, quotaLimited: false, writtenCount };
   } catch (err) {
+    if (isFirestoreQuotaError(err)) {
+      noteFirestoreQuotaHit('syncAllToFirestore', err);
+      return { synced: false, quotaLimited: true, writtenCount: 0 };
+    }
     console.error('Failed to syncAllToFirestore:', err);
+    return { synced: false, quotaLimited: false, writtenCount: 0 };
   }
 }
 
 async function saveBackupSnapshotToFirestore(snapshotId: string, payload: any): Promise<{ stored: boolean; chunkCount: number }> {
-  if (!firestoreDb) return { stored: false, chunkCount: 0 };
+  if (!firestoreDb || isFirestoreQuotaActive()) return { stored: false, chunkCount: 0 };
   try {
     // Ensure all individual collections are synced as well
-    await syncAllToFirestore(db);
+    const syncRes = await syncAllToFirestore(db);
+    if (syncRes.quotaLimited || isFirestoreQuotaActive()) {
+      return { stored: false, chunkCount: 0 };
+    }
 
     const jsonString = JSON.stringify(payload, null, 2);
     const totalBytes = Buffer.byteLength(jsonString, 'utf-8');
@@ -688,12 +870,16 @@ async function saveBackupSnapshotToFirestore(snapshotId: string, payload: any): 
         },
         jsonBackup: jsonString,
       };
-      await firestoreSet('backups', snapshotId, manifestDoc);
-      await firestoreSet('backups', 'latest', manifestDoc);
+      const ok1 = await firestoreSet('backups', snapshotId, manifestDoc);
+      const ok2 = await firestoreSet('backups', 'latest', manifestDoc);
+      if (!ok1 || !ok2 || isFirestoreQuotaActive()) {
+        return { stored: false, chunkCount: 0 };
+      }
     } else {
       const totalChunks = Math.ceil(jsonString.length / CHUNK_SIZE);
       chunkCount = totalChunks;
       for (let i = 0; i < totalChunks; i++) {
+        if (isFirestoreQuotaActive()) return { stored: false, chunkCount: 0 };
         const chunkData = jsonString.slice(i * CHUNK_SIZE, (i + 1) * CHUNK_SIZE);
         await setDoc(doc(firestoreDb, 'backups', snapshotId, 'chunks', `chunk_${i}`), {
           index: i,
@@ -717,14 +903,21 @@ async function saveBackupSnapshotToFirestore(snapshotId: string, payload: any): 
           attendance: db.attendance.length,
         },
       };
-      await firestoreSet('backups', snapshotId, manifestDoc);
-      await firestoreSet('backups', 'latest', manifestDoc);
+      const ok1 = await firestoreSet('backups', snapshotId, manifestDoc);
+      const ok2 = await firestoreSet('backups', 'latest', manifestDoc);
+      if (!ok1 || !ok2 || isFirestoreQuotaActive()) {
+        return { stored: false, chunkCount: 0 };
+      }
     }
 
     console.log(`☁️ Stored JSON backup snapshot "${snapshotId}" (${(totalBytes / 1024).toFixed(1)} KB, chunks: ${chunkCount}) to Cloud Firestore [${projectId}]`);
     return { stored: true, chunkCount };
   } catch (err) {
-    console.warn('Firestore backup snapshot storage warning:', err);
+    if (isFirestoreQuotaError(err)) {
+      noteFirestoreQuotaHit('backup snapshot', err);
+    } else {
+      console.warn('Firestore backup snapshot storage warning:', err);
+    }
     return { stored: false, chunkCount: 0 };
   }
 }
@@ -776,6 +969,7 @@ async function loadFromFirestore(): Promise<Partial<DatabaseData> | null> {
 function loadDatabase(): DatabaseData {
   let loadedData: DatabaseData | null = null;
   let loadedSource = 'none';
+  let loadedFileMtimeIso = '';
 
   // Attempt 1: Load primary DB_FILE
   try {
@@ -787,6 +981,7 @@ function loadDatabase(): DatabaseData {
       if (content && content.trim().length > 50) {
         loadedData = JSON.parse(content);
         loadedSource = 'primary (database.json)';
+        loadedFileMtimeIso = fs.statSync(DB_FILE).mtime.toISOString();
       }
     }
   } catch (err) {
@@ -802,6 +997,7 @@ function loadDatabase(): DatabaseData {
         if (backupContent && backupContent.trim().length > 50) {
           loadedData = JSON.parse(backupContent);
           loadedSource = 'rollback (database.backup.json)';
+          loadedFileMtimeIso = fs.statSync(BACKUP_DB_FILE).mtime.toISOString();
         }
       }
     } catch (bErr) {
@@ -822,6 +1018,7 @@ function loadDatabase(): DatabaseData {
           console.warn('⚡ RECOVERING: Loading from snapshot archive:', newest);
           loadedData = JSON.parse(fs.readFileSync(newest, 'utf-8'));
           loadedSource = `snapshot (${snapshots[0]})`;
+          loadedFileMtimeIso = fs.statSync(newest).mtime.toISOString();
         }
       }
     } catch (sErr) {
@@ -838,6 +1035,7 @@ function loadDatabase(): DatabaseData {
         if (baselineContent && baselineContent.trim().length > 50) {
           loadedData = JSON.parse(baselineContent);
           loadedSource = 'baseline (roster_baseline.json)';
+          loadedFileMtimeIso = '';
         }
       }
     } catch (bErr) {
@@ -848,78 +1046,125 @@ function loadDatabase(): DatabaseData {
   // If successfully loaded from primary, backup, snapshot, or baseline
   if (loadedData && Array.isArray(loadedData.users)) {
     console.log(`✅ Central Database loaded successfully from: ${loadedSource}`);
-    const loadedDepartments: Department[] = loadedData.departments || [];
+    const tombstones = normalizeTombstones(loadedData.deletedIds);
+    const loadedDepartments: Department[] = [...(loadedData.departments || [])];
+    let schemaUpgraded = !loadedData.lastSavedAt || !loadedData.deletedIds;
+
     defaultDepartments.forEach((reqDept) => {
+      if (tombstones.departments[reqDept.id]) return;
       const found = loadedDepartments.some((d) => d.id === reqDept.id || d.name === reqDept.name);
       if (!found) {
         loadedDepartments.push(reqDept);
+        schemaUpgraded = true;
       }
     });
 
-    let loadedUsers: User[] = loadedData.users;
-    let loadedLocations: WorkLocation[] = loadedData.locations && loadedData.locations.length > 0 ? loadedData.locations : defaultLocations;
-    let loadedSettings: SystemSettings = loadedData.settings ? { ...defaultSettings, ...loadedData.settings } : defaultSettings;
+    let loadedUsers: User[] = [...loadedData.users];
+    let loadedLocations: WorkLocation[] =
+      loadedData.locations && loadedData.locations.length > 0 ? [...loadedData.locations] : [...defaultLocations];
+    let loadedSettings: SystemSettings = loadedData.settings
+      ? { ...defaultSettings, ...loadedData.settings }
+      : { ...defaultSettings };
 
-    // Replay any Admin Journal mutations so Admin edits NEVER roll back or get lost across reboots
+    // Replay ONLY journal entries strictly newer than the loaded snapshot (or newer than entity.updatedAt)
+    // so historical journal entries NEVER overwrite newer edits or cascades across app modifications/restarts.
+    const isPrimary = loadedSource === 'primary (database.json)';
+    const loadedCutoffMs = Date.parse(loadedData.lastSavedAt || loadedFileMtimeIso || '') || 0;
     const journalEntries = loadAdminJournal();
+    let replayedCount = 0;
+
     if (journalEntries.length > 0) {
-      let replayedCount = 0;
       for (const entry of journalEntries) {
+        const entryTs = Date.parse(entry.timestamp || '') || 0;
+        if (isPrimary && loadedCutoffMs > 0 && entryTs > 0 && entryTs <= loadedCutoffMs) {
+          continue;
+        }
+
         if (entry.entity === 'user') {
           if (entry.op === 'create' && entry.data?.id) {
-            const exists = loadedUsers.some((u) => u.id === entry.data.id);
-            if (!exists) {
-              loadedUsers.push(entry.data);
+            const delTs = Date.parse(tombstones.users[entry.data.id] || '') || 0;
+            if (delTs > entryTs) continue;
+            delete tombstones.users[entry.data.id];
+            const idx = loadedUsers.findIndex((u) => u.id === entry.data.id);
+            if (idx === -1) {
+              loadedUsers.push({ ...entry.data, updatedAt: entry.data.updatedAt || entry.timestamp });
+              replayedCount++;
+            } else if (entryTs > getEntityTimestampMs(loadedUsers[idx])) {
+              loadedUsers[idx] = { ...loadedUsers[idx], ...entry.data, updatedAt: entry.data.updatedAt || entry.timestamp };
               replayedCount++;
             }
           } else if (entry.op === 'update' && entry.id && entry.data) {
             const idx = loadedUsers.findIndex((u) => u.id === entry.id);
-            if (idx !== -1) {
-              loadedUsers[idx] = { ...loadedUsers[idx], ...entry.data };
+            if (idx !== -1 && entryTs >= getEntityTimestampMs(loadedUsers[idx])) {
+              loadedUsers[idx] = { ...loadedUsers[idx], ...entry.data, updatedAt: entry.data.updatedAt || entry.timestamp };
               replayedCount++;
             }
           } else if (entry.op === 'delete' && entry.id) {
             const beforeLen = loadedUsers.length;
             loadedUsers = loadedUsers.filter((u) => u.id !== entry.id);
+            tombstones.users[entry.id] = entry.timestamp || new Date().toISOString();
             if (loadedUsers.length !== beforeLen) replayedCount++;
           } else if (entry.op === 'reset_password' && entry.id && entry.data?.password) {
             const targetUser = loadedUsers.find((u) => u.id === entry.id);
-            if (targetUser) {
+            if (targetUser && entryTs >= getEntityTimestampMs(targetUser)) {
               targetUser.password = entry.data.password;
+              targetUser.updatedAt = entry.timestamp;
               replayedCount++;
             }
           }
         } else if (entry.entity === 'location') {
-          if (entry.op === 'update' && entry.data?.id) {
-            const idx = loadedLocations.findIndex((l) => l.id === entry.data.id);
+          if ((entry.op === 'create' || entry.op === 'update') && entry.data?.id) {
+            const locId = entry.data.id;
+            const delTs = Date.parse(tombstones.locations[locId] || '') || 0;
+            if (entry.op === 'create' && delTs > entryTs) continue;
+            if (entry.op === 'create') delete tombstones.locations[locId];
+            const idx = loadedLocations.findIndex((l) => l.id === locId);
             if (idx !== -1) {
-              loadedLocations[idx] = { ...loadedLocations[idx], ...entry.data };
+              if (entryTs >= getEntityTimestampMs(loadedLocations[idx])) {
+                loadedLocations[idx] = { ...loadedLocations[idx], ...entry.data, updatedAt: entry.data.updatedAt || entry.timestamp };
+                replayedCount++;
+              }
             } else {
-              loadedLocations.push(entry.data);
+              loadedLocations.push({ ...entry.data, updatedAt: entry.data.updatedAt || entry.timestamp });
+              replayedCount++;
             }
-            replayedCount++;
           } else if (entry.op === 'delete' && entry.id) {
+            const beforeLen = loadedLocations.length;
             loadedLocations = loadedLocations.filter((l) => l.id !== entry.id);
-            replayedCount++;
+            tombstones.locations[entry.id] = entry.timestamp || new Date().toISOString();
+            if (loadedLocations.length !== beforeLen) replayedCount++;
           }
         } else if (entry.entity === 'department') {
-          if (entry.op === 'update' && entry.data?.id) {
-            const idx = loadedDepartments.findIndex((d) => d.id === entry.data.id);
+          if ((entry.op === 'create' || entry.op === 'update') && entry.data?.id) {
+            const deptId = entry.data.id;
+            const delTs = Date.parse(tombstones.departments[deptId] || '') || 0;
+            if (entry.op === 'create' && delTs > entryTs) continue;
+            if (entry.op === 'create') delete tombstones.departments[deptId];
+            const idx = loadedDepartments.findIndex((d) => d.id === deptId);
             if (idx !== -1) {
-              loadedDepartments[idx] = { ...loadedDepartments[idx], ...entry.data };
+              if (entryTs >= getEntityTimestampMs(loadedDepartments[idx])) {
+                loadedDepartments[idx] = { ...loadedDepartments[idx], ...entry.data, updatedAt: entry.data.updatedAt || entry.timestamp };
+                replayedCount++;
+              }
             } else {
-              loadedDepartments.push(entry.data);
+              loadedDepartments.push({ ...entry.data, updatedAt: entry.data.updatedAt || entry.timestamp });
+              replayedCount++;
             }
-            replayedCount++;
           } else if (entry.op === 'delete' && entry.id) {
             const filtered = loadedDepartments.filter((d) => d.id !== entry.id);
-            loadedDepartments.length = 0;
-            loadedDepartments.push(...filtered);
-            replayedCount++;
+            tombstones.departments[entry.id] = entry.timestamp || new Date().toISOString();
+            if (filtered.length !== loadedDepartments.length) {
+              loadedDepartments.length = 0;
+              loadedDepartments.push(...filtered);
+              replayedCount++;
+            }
           }
         } else if (entry.entity === 'settings' && entry.data) {
-          loadedSettings = { ...loadedSettings, ...entry.data };
-          replayedCount++;
+          const settingsTs = Date.parse(loadedSettings.updatedAt || '') || 0;
+          if (entryTs >= settingsTs) {
+            loadedSettings = { ...loadedSettings, ...entry.data, updatedAt: entry.data.updatedAt || entry.timestamp };
+            replayedCount++;
+          }
         }
       }
       if (replayedCount > 0) {
@@ -933,26 +1178,29 @@ function loadDatabase(): DatabaseData {
       }
     });
 
-    // Filter out old demo dummy records
-    let loadedAttendance: AttendanceRecord[] = (loadedData.attendance || []).filter(
+    // Filter out ONLY exact demo dummy records (never real employees named สมชาย)
+    const rawAttendance = loadedData.attendance || [];
+    const loadedAttendance: AttendanceRecord[] = rawAttendance.filter(
       (r) =>
         r.userId !== 'usr_somchai' &&
-        !(r.userName && r.userName.includes('สมชาย')) &&
+        r.userName !== 'สมชาย ใจดี' &&
         r.id !== 'att_1793678354265_gye2' &&
         r.id !== 'att_1791596015445_jm7c'
     );
+    const filteredDemo = loadedAttendance.length !== rawAttendance.length;
 
-    // Merge in any records from permanent archive that might be missing
+    // Merge in any records from permanent archive that might be missing (respecting deletion tombstones)
     const archiveRecords = loadAttendanceArchive();
+    let restoredCount = 0;
     if (archiveRecords.length > 0) {
       const existingIds = new Set(loadedAttendance.map((r) => r.id));
-      let restoredCount = 0;
       for (const arc of archiveRecords) {
         if (
           arc.userId !== 'usr_somchai' &&
-          !(arc.userName && arc.userName.includes('สมชาย')) &&
+          arc.userName !== 'สมชาย ใจดี' &&
           arc.id !== 'att_1793678354265_gye2' &&
           arc.id !== 'att_1791596015445_jm7c' &&
+          !tombstones.attendance[arc.id] &&
           !existingIds.has(arc.id)
         ) {
           loadedAttendance.push(arc);
@@ -975,9 +1223,13 @@ function loadDatabase(): DatabaseData {
       attendance: loadedAttendance,
       settings: loadedSettings,
       lineLogs: loadedData.lineLogs || [],
+      deletedIds: tombstones,
+      lastSavedAt: loadedData.lastSavedAt,
     };
 
-    saveDatabase(cleanData);
+    if (!isPrimary || replayedCount > 0 || restoredCount > 0 || filteredDemo || schemaUpgraded) {
+      saveDatabase(cleanData);
+    }
     return cleanData;
   }
 
@@ -1004,6 +1256,7 @@ function loadDatabase(): DatabaseData {
     attendance: [],
     settings: defaultSettings,
     lineLogs: [],
+    deletedIds: normalizeTombstones(),
   };
 
   saveDatabase(initialData);
@@ -1141,13 +1394,12 @@ async function startServer() {
           new Promise<null>((resolve) => setTimeout(() => resolve(null), 10000)),
         ]);
         if (cloudData && cloudData.users && cloudData.users.length > 0) {
-          console.log(`☁️ Cloud Firestore connected: Loaded ${cloudData.users.length} users and ${cloudData.attendance?.length || 0} attendance records.`);
-          db.users = cloudData.users;
-          if (cloudData.departments && cloudData.departments.length > 0) db.departments = cloudData.departments;
-          if (cloudData.locations && cloudData.locations.length > 0) db.locations = cloudData.locations;
-          if (cloudData.attendance) db.attendance = cloudData.attendance;
-          if (cloudData.settings) db.settings = { ...db.settings, ...cloudData.settings };
-          saveDatabase(db);
+          console.log(`☁️ Cloud Firestore connected: Merging ${cloudData.users.length} cloud users and ${cloudData.attendance?.length || 0} attendance records.`);
+          const merged = mergeDatabaseWithCloud(db, cloudData);
+          if (merged) {
+            saveDatabase(db);
+            rewriteAttendanceArchive(db.attendance);
+          }
           if (remoteMetaVer) persistLastHandledCloudVersion(remoteMetaVer);
         } else if (!hasLocalUsers && !isFirestoreQuotaActive()) {
           console.log('☁️ Seeding Cloud Firestore with 57 personnel, work locations, and settings...');
@@ -1287,11 +1539,13 @@ async function startServer() {
 
   // 1.2 Firebase Cloud Firestore Status & Zero Data Loss Guarantee
   app.get('/api/firebase-status', (req: Request, res: Response) => {
+    const quotaLimited = isFirestoreQuotaActive();
     res.json({
-      connected: !!firestoreDb,
+      connected: !!firestoreDb && !quotaLimited,
+      quotaLimited,
       projectId: firestoreConfig?.projectId || 'smart-time-ca6f9',
       databaseId: firestoreConfig?.firestoreDatabaseId || 'default',
-      status: firestoreDb ? 'connected' : 'offline',
+      status: !firestoreDb ? 'offline' : quotaLimited ? 'quota_limited' : 'connected',
       cloudProtected: true,
       counts: {
         users: db.users.length,
@@ -1306,10 +1560,28 @@ async function startServer() {
 
   app.post('/api/firebase-sync', async (req: Request, res: Response) => {
     try {
-      await syncAllToFirestore(db);
+      const result = await syncAllToFirestore(db);
+      if (result.quotaLimited) {
+        res.json({
+          success: false,
+          quotaLimited: true,
+          message:
+            'Cloud Firestore ถึงโควตาฟรีประจำวันชั่วคราว — ข้อมูลทั้งหมดถูกบันทึกไว้อย่างปลอดภัยในฐานข้อมูลกลางบนเซิร์ฟเวอร์แล้ว',
+          counts: {
+            users: db.users.length,
+            locations: db.locations.length,
+            departments: db.departments.length,
+            attendance: db.attendance.length,
+          },
+        });
+        return;
+      }
       res.json({
-        success: true,
-        message: 'ซิงค์ข้อมูลทั้งหมดเข้าสู่ Cloud Firestore (smart-time-ca6f9) สำเร็จ ปลอดภัย 100%',
+        success: result.synced,
+        quotaLimited: false,
+        message: result.synced
+          ? 'ซิงค์ข้อมูลทั้งหมดเข้าสู่ Cloud Firestore (smart-time-ca6f9) สำเร็จ ปลอดภัย 100%'
+          : 'บันทึกข้อมูลไว้ในฐานข้อมูลกลางบนเซิร์ฟเวอร์เรียบร้อยแล้ว (Firebase ยังไม่พร้อมเชื่อมต่อ)',
         counts: {
           users: db.users.length,
           locations: db.locations.length,
@@ -1470,6 +1742,7 @@ async function startServer() {
 
   app.post('/api/departments', async (req: Request, res: Response) => {
     const { id, name, code, color, description, lineNotifyToken, notifyOnCheckIn, notifyOnCheckOut } = req.body || {};
+    const nowIso = new Date().toISOString();
 
     if (id) {
       // Update existing (supports partial updates like lineNotifyToken from AdminLineSettings)
@@ -1496,21 +1769,36 @@ async function startServer() {
           lineNotifyToken: lineNotifyToken !== undefined ? String(lineNotifyToken).trim() : existingDept.lineNotifyToken || '',
           notifyOnCheckIn: notifyOnCheckIn !== undefined ? Boolean(notifyOnCheckIn) : existingDept.notifyOnCheckIn ?? true,
           notifyOnCheckOut: notifyOnCheckOut !== undefined ? Boolean(notifyOnCheckOut) : existingDept.notifyOnCheckOut ?? true,
+          updatedAt: nowIso,
         };
 
+        if (db.deletedIds?.departments?.[id]) {
+          delete db.deletedIds.departments[id];
+        }
+
         const touchedUsers: User[] = [];
+        const touchedLocations: WorkLocation[] = [];
         const touchedAttendance: AttendanceRecord[] = [];
 
         if (nextName !== existingDept.name) {
           db.users.forEach((u) => {
             if (u.departmentId === id) {
               u.departmentName = nextName;
+              u.updatedAt = nowIso;
               touchedUsers.push(u);
+            }
+          });
+          db.locations.forEach((l) => {
+            if (l.departmentId === id) {
+              l.departmentName = nextName;
+              l.updatedAt = nowIso;
+              touchedLocations.push(l);
             }
           });
           db.attendance.forEach((att) => {
             if (att.departmentId === id) {
               att.departmentName = nextName;
+              att.updatedAt = nowIso;
               touchedAttendance.push(att);
             }
           });
@@ -1520,16 +1808,29 @@ async function startServer() {
         if (touchedAttendance.length > 0) {
           rewriteAttendanceArchive(db.attendance);
         }
-        await appendToAdminJournal({
-          entity: 'department',
-          op: 'update',
-          id: db.departments[index].id,
-          data: db.departments[index],
-          timestamp: new Date().toISOString(),
-        });
-        for (const u of touchedUsers) {
-          await firestoreSet('users', u.id, u);
-        }
+        await appendManyToAdminJournal([
+          {
+            entity: 'department',
+            op: 'update',
+            id: db.departments[index].id,
+            data: db.departments[index],
+            timestamp: nowIso,
+          },
+          ...touchedUsers.map((u) => ({
+            entity: 'user' as const,
+            op: 'update' as const,
+            id: u.id,
+            data: u,
+            timestamp: nowIso,
+          })),
+          ...touchedLocations.map((l) => ({
+            entity: 'location' as const,
+            op: 'update' as const,
+            id: l.id,
+            data: l,
+            timestamp: nowIso,
+          })),
+        ]);
         for (const att of touchedAttendance) {
           await firestoreSet('attendance', att.id, att);
         }
@@ -1554,6 +1855,7 @@ async function startServer() {
       lineNotifyToken: lineNotifyToken ? String(lineNotifyToken).trim() : '',
       notifyOnCheckIn: notifyOnCheckIn !== undefined ? Boolean(notifyOnCheckIn) : true,
       notifyOnCheckOut: notifyOnCheckOut !== undefined ? Boolean(notifyOnCheckOut) : true,
+      updatedAt: nowIso,
     };
 
     db.departments.push(newDept);
@@ -1563,7 +1865,7 @@ async function startServer() {
       op: 'create',
       id: newDept.id,
       data: newDept,
-      timestamp: new Date().toISOString(),
+      timestamp: nowIso,
     });
     res.status(201).json({ message: 'สร้างแผนกใหม่สำเร็จ', department: newDept });
   });
@@ -1578,13 +1880,16 @@ async function startServer() {
       return;
     }
 
+    const nowIso = new Date().toISOString();
     db.departments = db.departments.filter((d) => d.id !== id);
+    db.deletedIds = normalizeTombstones(db.deletedIds);
+    db.deletedIds.departments[id] = nowIso;
     saveDatabase(db);
     await appendToAdminJournal({
       entity: 'department',
       op: 'delete',
       id,
-      timestamp: new Date().toISOString(),
+      timestamp: nowIso,
     });
     res.json({ message: 'ลบแผนกเรียบร้อยแล้ว' });
   });
@@ -1607,6 +1912,7 @@ async function startServer() {
       isActive,
     } = req.body || {};
 
+    const nowIso = new Date().toISOString();
     const existingIndex = id ? db.locations.findIndex((l) => l.id === id) : -1;
     const existingLoc = existingIndex !== -1 ? db.locations[existingIndex] : undefined;
 
@@ -1640,7 +1946,12 @@ async function startServer() {
           departmentId: effectiveDeptId,
           departmentName: deptName,
           isActive: isActive !== undefined ? Boolean(isActive) : existingLoc.isActive,
+          updatedAt: nowIso,
         };
+
+        if (db.deletedIds?.locations?.[id]) {
+          delete db.deletedIds.locations[id];
+        }
 
         const touchedUsers: User[] = [];
         const touchedAttendance: AttendanceRecord[] = [];
@@ -1649,6 +1960,7 @@ async function startServer() {
         db.users.forEach((u) => {
           if (u.assignedLocationId === id) {
             u.assignedLocationName = updatedLocName;
+            u.updatedAt = nowIso;
             touchedUsers.push(u);
           }
         });
@@ -1658,6 +1970,7 @@ async function startServer() {
           if (att.workLocationId === id) {
             att.locationName = updatedLocName;
             att.workLocationName = updatedLocName;
+            att.updatedAt = nowIso;
             touchedAttendance.push(att);
           }
         });
@@ -1666,16 +1979,22 @@ async function startServer() {
         if (touchedAttendance.length > 0) {
           rewriteAttendanceArchive(db.attendance);
         }
-        await appendToAdminJournal({
-          entity: 'location',
-          op: 'update',
-          id: db.locations[index].id,
-          data: db.locations[index],
-          timestamp: new Date().toISOString(),
-        });
-        for (const u of touchedUsers) {
-          await firestoreSet('users', u.id, u);
-        }
+        await appendManyToAdminJournal([
+          {
+            entity: 'location',
+            op: 'update',
+            id: db.locations[index].id,
+            data: db.locations[index],
+            timestamp: nowIso,
+          },
+          ...touchedUsers.map((u) => ({
+            entity: 'user' as const,
+            op: 'update' as const,
+            id: u.id,
+            data: u,
+            timestamp: nowIso,
+          })),
+        ]);
         for (const att of touchedAttendance) {
           await firestoreSet('attendance', att.id, att);
         }
@@ -1697,7 +2016,8 @@ async function startServer() {
       departmentId: departmentId || 'all',
       departmentName: deptName,
       isActive: isActive !== undefined ? Boolean(isActive) : true,
-      createdAt: new Date().toISOString(),
+      createdAt: nowIso,
+      updatedAt: nowIso,
     };
 
     db.locations.push(newLoc);
@@ -1707,7 +2027,7 @@ async function startServer() {
       op: 'create',
       id: newLoc.id,
       data: newLoc,
-      timestamp: new Date().toISOString(),
+      timestamp: nowIso,
     });
     res.status(201).json({ message: 'สร้างจุดปฏิบัติงานใหม่สำเร็จ', location: newLoc });
   });
@@ -1720,26 +2040,37 @@ async function startServer() {
       return;
     }
 
+    const nowIso = new Date().toISOString();
     db.locations = db.locations.filter((l) => l.id !== id);
+    db.deletedIds = normalizeTombstones(db.deletedIds);
+    db.deletedIds.locations[id] = nowIso;
+
     const touchedUsers: User[] = [];
     db.users.forEach((u) => {
       if (u.assignedLocationId === id) {
         u.assignedLocationId = '';
         u.assignedLocationName = '';
+        u.updatedAt = nowIso;
         touchedUsers.push(u);
       }
     });
 
     saveDatabase(db);
-    await appendToAdminJournal({
-      entity: 'location',
-      op: 'delete',
-      id,
-      timestamp: new Date().toISOString(),
-    });
-    for (const u of touchedUsers) {
-      await firestoreSet('users', u.id, u);
-    }
+    await appendManyToAdminJournal([
+      {
+        entity: 'location',
+        op: 'delete',
+        id,
+        timestamp: nowIso,
+      },
+      ...touchedUsers.map((u) => ({
+        entity: 'user' as const,
+        op: 'update' as const,
+        id: u.id,
+        data: u,
+        timestamp: nowIso,
+      })),
+    ]);
     res.json({ message: 'ลบจุดปฏิบัติงานเรียบร้อยแล้ว' });
   });
 
@@ -1768,14 +2099,16 @@ async function startServer() {
       res.status(404).json({ error: 'ไม่พบผู้ใช้งาน' });
       return;
     }
+    const nowIso = new Date().toISOString();
     db.users[userIndex].password = cleanNewPw;
+    db.users[userIndex].updatedAt = nowIso;
     saveDatabase(db);
     await appendToAdminJournal({
       entity: 'user',
       op: 'update',
       id,
       data: db.users[userIndex],
-      timestamp: new Date().toISOString(),
+      timestamp: nowIso,
     });
     res.json({ message: 'เปลี่ยนรหัสผ่านสำเร็จ', username: db.users[userIndex].username });
   });
@@ -1820,6 +2153,7 @@ async function startServer() {
       if (loc) assignedLocationName = loc.name;
     }
 
+    const nowIso = new Date().toISOString();
     const newUser: User = {
       id: `usr_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
       username: cleanUsername,
@@ -1834,8 +2168,13 @@ async function startServer() {
       phoneNumber: phoneNumber ? String(phoneNumber).trim() : '',
       employeeCode: employeeCode ? String(employeeCode).trim() : `EMP-${Math.floor(100 + Math.random() * 900)}`,
       status: status === 'inactive' ? 'inactive' : 'active',
-      createdAt: new Date().toISOString(),
+      createdAt: nowIso,
+      updatedAt: nowIso,
     };
+
+    if (db.deletedIds?.users?.[newUser.id]) {
+      delete db.deletedIds.users[newUser.id];
+    }
 
     db.users.push(newUser);
     saveDatabase(db);
@@ -1844,7 +2183,7 @@ async function startServer() {
       op: 'create',
       id: newUser.id,
       data: newUser,
-      timestamp: new Date().toISOString(),
+      timestamp: nowIso,
     });
 
     const { password: _, ...safeUser } = newUser;
@@ -1859,69 +2198,145 @@ async function startServer() {
       return;
     }
 
+    const nowIso = new Date().toISOString();
     let importedCount = 0;
     let updatedCount = 0;
-    const touchedUsers: User[] = [];
+    const batchJournal: AdminJournalEntry[] = [];
+    const touchedAttendance: AttendanceRecord[] = [];
 
     for (const item of incomingUsers) {
-      if (!item.fullName || !item.username) continue;
-      const cleanUsername = String(item.username).trim().toLowerCase();
-      const existingIdx = db.users.findIndex(
-        (u) =>
-          u.username.toLowerCase() === cleanUsername ||
-          u.fullName.replace(/\s+/g, '') === String(item.fullName).replace(/\s+/g, '')
-      );
+      if (!item?.fullName || !item?.username) continue;
+      const cleanUsername = normalizeIdentifierText(item.username).toLowerCase();
+      if (!cleanUsername) continue;
 
-      const dept = db.departments.find(
-        (d) => d.id === item.departmentId || d.name === item.departmentName || d.name === item.departmentId
-      );
-      const departmentName = dept ? dept.name : (item.departmentName || item.departmentId || 'ทั่วไป');
-      const departmentId = dept ? dept.id : (item.departmentId || 'dep_general');
+      let existingIdx = item.id ? db.users.findIndex((u) => u.id === item.id) : -1;
+      if (existingIdx === -1) {
+        existingIdx = db.users.findIndex((u) => normalizeIdentifierText(u.username).toLowerCase() === cleanUsername);
+      }
+      if (existingIdx === -1) {
+        existingIdx = db.users.findIndex(
+          (u) => u.fullName.replace(/\s+/g, '') === String(item.fullName).replace(/\s+/g, '')
+        );
+      }
 
-      if (existingIdx !== -1) {
-        // Update
-        db.users[existingIdx] = {
-          ...db.users[existingIdx],
+      const existing = existingIdx !== -1 ? db.users[existingIdx] : undefined;
+      const hasDeptInput = item.departmentId !== undefined || item.departmentName !== undefined;
+      const dept = hasDeptInput
+        ? db.departments.find(
+            (d) => d.id === item.departmentId || d.name === item.departmentName || d.name === item.departmentId
+          )
+        : undefined;
+
+      const departmentId = dept
+        ? dept.id
+        : hasDeptInput
+          ? (item.departmentId || existing?.departmentId || 'dep_general')
+          : (existing?.departmentId || 'dep_general');
+      const departmentName = dept
+        ? dept.name
+        : hasDeptInput
+          ? (item.departmentName || item.departmentId || existing?.departmentName || 'ทั่วไป')
+          : (existing?.departmentName || 'ทั่วไป');
+
+      let assignedLocationId = existing?.assignedLocationId || '';
+      let assignedLocationName = existing?.assignedLocationName || '';
+      if (item.assignedLocationId !== undefined) {
+        if (item.assignedLocationId) {
+          const loc = db.locations.find((l) => l.id === item.assignedLocationId);
+          assignedLocationId = String(item.assignedLocationId);
+          assignedLocationName = loc ? loc.name : (item.assignedLocationName || '');
+        } else {
+          assignedLocationId = '';
+          assignedLocationName = '';
+        }
+      }
+
+      const cleanPw = item.password !== undefined ? normalizePasswordText(item.password) : '';
+
+      if (existingIdx !== -1 && existing) {
+        const duplicateUsername = db.users.some(
+          (u) => u.id !== existing.id && normalizeIdentifierText(u.username).toLowerCase() === cleanUsername
+        );
+        const updatedUser: User = {
+          ...existing,
+          username: duplicateUsername ? existing.username : cleanUsername,
           fullName: String(item.fullName).trim(),
-          role: item.role ? item.role : db.users[existingIdx].role,
+          role: item.role && ['admin', 'employee', 'volunteer'].includes(item.role) ? item.role : existing.role,
           departmentId,
           departmentName,
-          position: item.position !== undefined ? String(item.position).trim() : db.users[existingIdx].position,
-          phoneNumber: item.phoneNumber !== undefined ? String(item.phoneNumber).trim() : db.users[existingIdx].phoneNumber,
-          employeeCode: item.employeeCode ? String(item.employeeCode).trim() : db.users[existingIdx].employeeCode,
-          status: item.status || db.users[existingIdx].status || 'active',
-          password: item.password ? String(item.password).trim() : db.users[existingIdx].password,
+          position: item.position !== undefined ? String(item.position).trim() : existing.position,
+          assignedLocationId,
+          assignedLocationName,
+          phoneNumber: item.phoneNumber !== undefined ? String(item.phoneNumber).trim() : existing.phoneNumber,
+          employeeCode: item.employeeCode ? String(item.employeeCode).trim() : existing.employeeCode,
+          status: item.status || existing.status || 'active',
+          password: cleanPw !== '' ? cleanPw : existing.password,
+          updatedAt: nowIso,
         };
-        touchedUsers.push(db.users[existingIdx]);
+        db.users[existingIdx] = updatedUser;
+        if (db.deletedIds?.users?.[updatedUser.id]) {
+          delete db.deletedIds.users[updatedUser.id];
+        }
+        db.attendance.forEach((att) => {
+          if (att.userId === updatedUser.id) {
+            att.userName = updatedUser.fullName;
+            att.userRole = updatedUser.role;
+            att.departmentId = updatedUser.departmentId;
+            att.departmentName = updatedUser.departmentName;
+            att.updatedAt = nowIso;
+            touchedAttendance.push(att);
+          }
+        });
+        batchJournal.push({
+          entity: 'user',
+          op: 'update',
+          id: updatedUser.id,
+          data: updatedUser,
+          timestamp: nowIso,
+        });
         updatedCount++;
       } else {
-        // Create new
         const newUid = item.id || `usr_${Date.now().toString(36)}_${Math.random().toString(36).substring(2, 6)}`;
         const createdUser: User = {
           id: newUid,
           username: cleanUsername,
-          password: item.password ? String(item.password).trim() : '123456',
+          password: cleanPw !== '' ? cleanPw : '123456',
           fullName: String(item.fullName).trim(),
           role: (item.role && ['admin', 'employee', 'volunteer'].includes(item.role) ? item.role : 'employee') as any,
           departmentId,
           departmentName,
           position: item.position ? String(item.position).trim() : '',
+          assignedLocationId,
+          assignedLocationName,
           phoneNumber: item.phoneNumber ? String(item.phoneNumber).trim() : '',
           employeeCode: item.employeeCode ? String(item.employeeCode).trim() : `EMP-${Math.floor(100 + Math.random() * 900)}`,
           status: item.status === 'inactive' ? 'inactive' : 'active',
-          createdAt: new Date().toISOString(),
+          createdAt: nowIso,
+          updatedAt: nowIso,
         };
+        if (db.deletedIds?.users?.[createdUser.id]) {
+          delete db.deletedIds.users[createdUser.id];
+        }
         db.users.push(createdUser);
-        touchedUsers.push(createdUser);
+        batchJournal.push({
+          entity: 'user',
+          op: 'create',
+          id: createdUser.id,
+          data: createdUser,
+          timestamp: nowIso,
+        });
         importedCount++;
       }
     }
 
     saveDatabase(db);
-    for (const u of touchedUsers) {
-      await firestoreSet('users', u.id, u);
+    if (touchedAttendance.length > 0) {
+      rewriteAttendanceArchive(db.attendance);
     }
-    await firestoreUpdateSyncMeta();
+    await appendManyToAdminJournal(batchJournal);
+    for (const att of touchedAttendance) {
+      await firestoreSet('attendance', att.id, att);
+    }
 
     res.json({
       message: `นำเข้าข้อมูลสำเร็จ: เพิ่มใหม่ ${importedCount} รายการ, อัปเดต ${updatedCount} รายการ`,
@@ -1952,6 +2367,7 @@ async function startServer() {
       return;
     }
 
+    const nowIso = new Date().toISOString();
     const target = db.users[userIndex];
 
     let nextUsername = target.username;
@@ -2012,6 +2428,7 @@ async function startServer() {
       phoneNumber: phoneNumber !== undefined ? String(phoneNumber).trim() : target.phoneNumber,
       employeeCode: employeeCode !== undefined ? String(employeeCode).trim() : target.employeeCode,
       status: status ? status : target.status,
+      updatedAt: nowIso,
     };
 
     const updatedUser = db.users[userIndex];
@@ -2024,6 +2441,7 @@ async function startServer() {
         att.userRole = updatedUser.role;
         att.departmentId = updatedUser.departmentId;
         att.departmentName = updatedUser.departmentName;
+        att.updatedAt = nowIso;
         touchedAttendance.push(att);
       }
     });
@@ -2037,7 +2455,7 @@ async function startServer() {
       op: 'update',
       id: updatedUser.id,
       data: updatedUser,
-      timestamp: new Date().toISOString(),
+      timestamp: nowIso,
     });
     for (const att of touchedAttendance) {
       await firestoreSet('attendance', att.id, att);
@@ -2060,13 +2478,16 @@ async function startServer() {
       return;
     }
 
+    const nowIso = new Date().toISOString();
     db.users = db.users.filter((u) => u.id !== id);
+    db.deletedIds = normalizeTombstones(db.deletedIds);
+    db.deletedIds.users[id] = nowIso;
     saveDatabase(db);
     await appendToAdminJournal({
       entity: 'user',
       op: 'delete',
       id,
-      timestamp: new Date().toISOString(),
+      timestamp: nowIso,
     });
     res.json({ message: 'ลบผู้ใช้งานเรียบร้อยแล้ว' });
   });
@@ -2220,6 +2641,7 @@ async function startServer() {
 
       const recordId = `att_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
 
+      const nowIso = new Date().toISOString();
       const newRecord: AttendanceRecord = {
         id: recordId,
         userId: user.id,
@@ -2243,9 +2665,10 @@ async function startServer() {
         deviceOs,
         note: note ? String(note).trim() : '',
         isOfflineRecord: Boolean(isOfflineRecord),
-        syncedAt: isOfflineRecord ? new Date().toISOString() : undefined,
+        syncedAt: isOfflineRecord ? nowIso : undefined,
         lineNotificationStatus: 'simulated',
         lineTargetDepartment: user.departmentName,
+        updatedAt: nowIso,
       };
 
       // Department-targeted LINE Notify message
@@ -2332,6 +2755,7 @@ ${newRecord.note ? `📝 หมายเหตุ/ภารกิจ: ${newRecor
         const user = db.users.find((u) => u.id === rec.userId);
         const recordId = rec.id || `att_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
 
+        const nowIso = new Date().toISOString();
         const newRec: AttendanceRecord = {
           ...rec,
           id: recordId,
@@ -2340,9 +2764,13 @@ ${newRecord.note ? `📝 หมายเหตุ/ภารกิจ: ${newRecor
           departmentId: user?.departmentId || rec.departmentId,
           departmentName: user?.departmentName || rec.departmentName,
           isOfflineRecord: true,
-          syncedAt: new Date().toISOString(),
+          syncedAt: nowIso,
           lineNotificationStatus: 'simulated',
+          updatedAt: nowIso,
         };
+        if (db.deletedIds?.attendance?.[recordId]) {
+          delete db.deletedIds.attendance[recordId];
+        }
 
         if (db.settings.enableLineNotifications) {
           const typeThai = newRec.type === 'check_in' ? '🟢 บันทึกเวลาเข้างาน (Check-In)' : '🔴 บันทึกเวลาออกงาน (Check-Out)';
@@ -2474,6 +2902,7 @@ ${newRecord.note ? `📝 หมายเหตุ/ภารกิจ: ${newRecor
       nextIsWithinGeofence = nextDistance <= (matchedLoc.radiusMeters || 200);
     }
 
+    const nowIso = new Date().toISOString();
     db.attendance[index] = {
       ...current,
       userId: nextUserId,
@@ -2493,6 +2922,7 @@ ${newRecord.note ? `📝 หมายเหตุ/ภารกิจ: ${newRecor
       date: nextDate,
       time: normalizedTime,
       timestamp: nextTimestamp,
+      updatedAt: nowIso,
     };
 
     saveDatabase(db);
@@ -2512,6 +2942,9 @@ ${newRecord.note ? `📝 หมายเหตุ/ภารกิจ: ${newRecor
       res.status(404).json({ error: 'ไม่พบรายการที่ต้องการลบ' });
       return;
     }
+    const nowIso = new Date().toISOString();
+    db.deletedIds = normalizeTombstones(db.deletedIds);
+    db.deletedIds.attendance[id] = nowIso;
     saveDatabase(db);
     rewriteAttendanceArchive(db.attendance);
     if (firestoreDb) {
@@ -2528,18 +2961,23 @@ ${newRecord.note ? `📝 หมายเหตุ/ภารกิจ: ${newRecor
       const toRemove = db.attendance.filter(
         (r) =>
           r.userId === 'usr_somchai' ||
-          (r.userName && r.userName.includes('สมชาย')) ||
+          r.userName === 'สมชาย ใจดี' ||
           r.id === 'att_1793678354265_gye2' ||
           r.id === 'att_1791596015445_jm7c'
       );
       db.attendance = db.attendance.filter(
         (r) =>
           r.userId !== 'usr_somchai' &&
-          !(r.userName && r.userName.includes('สมชาย')) &&
+          r.userName !== 'สมชาย ใจดี' &&
           r.id !== 'att_1793678354265_gye2' &&
           r.id !== 'att_1791596015445_jm7c'
       );
       const removedCount = initialCount - db.attendance.length;
+      const nowIso = new Date().toISOString();
+      db.deletedIds = normalizeTombstones(db.deletedIds);
+      toRemove.forEach((rem) => {
+        db.deletedIds!.attendance[rem.id] = nowIso;
+      });
       saveDatabase(db);
       rewriteAttendanceArchive(db.attendance);
 
@@ -2612,18 +3050,25 @@ ${newRecord.note ? `📝 หมายเหตุ/ภารกิจ: ${newRecor
       }
 
       let restoredCount = 0;
+      const nowIso = new Date().toISOString();
       const existingIds = new Set(db.attendance.map((r) => r.id));
       const newlyRestored: AttendanceRecord[] = [];
+      db.deletedIds = normalizeTombstones(db.deletedIds);
 
       for (const r of records) {
         if (r && r.id && !existingIds.has(r.id)) {
           // Skip dummy records
-          if (r.userId === 'usr_somchai' || (r.userName && r.userName.includes('สมชาย'))) {
+          if (r.userId === 'usr_somchai' || r.userName === 'สมชาย ใจดี') {
             continue;
           }
-          db.attendance.push(r);
-          existingIds.add(r.id);
-          newlyRestored.push(r);
+          const restoredRec: AttendanceRecord = {
+            ...r,
+            updatedAt: r.updatedAt || nowIso,
+          };
+          delete db.deletedIds.attendance[restoredRec.id];
+          db.attendance.push(restoredRec);
+          existingIds.add(restoredRec.id);
+          newlyRestored.push(restoredRec);
           restoredCount++;
         }
       }
@@ -2667,9 +3112,14 @@ ${newRecord.note ? `📝 หมายเหตุ/ภารกิจ: ${newRecor
       res.status(400).json({ error: 'ต้องยืนยันการลบด้วยคำว่า CLEAR_ALL_ATTENDANCE' });
       return;
     }
+    const nowIso = new Date().toISOString();
     const deletedIds = db.attendance.map((r) => r.id);
     const count = deletedIds.length;
     db.attendance = [];
+    db.deletedIds = normalizeTombstones(db.deletedIds);
+    deletedIds.forEach((attId) => {
+      db.deletedIds!.attendance[attId] = nowIso;
+    });
     saveDatabase(db);
     rewriteAttendanceArchive([]);
     if (firestoreDb) {
@@ -2687,16 +3137,18 @@ ${newRecord.note ? `📝 หมายเหตุ/ภารกิจ: ${newRecor
   });
 
   app.post('/api/settings', async (req: Request, res: Response) => {
+    const nowIso = new Date().toISOString();
     db.settings = {
       ...db.settings,
       ...req.body,
+      updatedAt: nowIso,
     };
     saveDatabase(db);
     await appendToAdminJournal({
       entity: 'settings',
       op: 'update',
       data: db.settings,
-      timestamp: new Date().toISOString(),
+      timestamp: nowIso,
     });
     res.json({ message: 'บันทึกการตั้งค่าระบบเรียบร้อยแล้ว', settings: db.settings });
   });
@@ -2812,7 +3264,9 @@ ${newRecord.note ? `📝 หมายเหตุ/ภารกิจ: ${newRecor
     try {
       // Run sanity checks
       let repaired = false;
+      const tombstones = normalizeTombstones(db.deletedIds);
       defaultDepartments.forEach((reqDept) => {
+        if (tombstones.departments[reqDept.id]) return;
         const found = db.departments.some((d) => d.id === reqDept.id || d.name === reqDept.name);
         if (!found) {
           db.departments.push(reqDept);
@@ -2827,7 +3281,9 @@ ${newRecord.note ? `📝 หมายเหตุ/ภารกิจ: ${newRecor
         repaired = true;
       }
 
-      saveDatabase(db);
+      if (repaired) {
+        saveDatabase(db);
+      }
 
       res.json({
         status: 'verified',

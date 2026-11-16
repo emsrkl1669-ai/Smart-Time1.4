@@ -494,8 +494,8 @@ export const AdminLineSettings: React.FC<AdminLineSettingsProps> = ({
           <div
             className={`p-3 rounded-xl border text-xs ${
               testResult.success
-                ? 'bg-emerald-50 border-emerald-200 text-emerald-850'
-                : 'bg-rose-50 border-rose-200 text-rose-850'
+                ? 'bg-emerald-50 border-emerald-200 text-emerald-900'
+                : 'bg-rose-50 border-rose-200 text-rose-900'
             }`}
           >
             <div className="flex items-start gap-2">

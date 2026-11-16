@@ -270,7 +270,7 @@ export const ShareAppModal: React.FC<ShareAppModalProps> = ({
         <div className="p-4 sm:p-5 overflow-y-auto space-y-4">
           {/* Toast Notification */}
           {shareSuccessToast && (
-            <div className="p-3 bg-emerald-50 border border-emerald-200 text-emerald-850 rounded-2xl text-xs font-semibold flex items-center gap-2 animate-in fade-in">
+            <div className="p-3 bg-emerald-50 border border-emerald-200 text-emerald-900 rounded-2xl text-xs font-semibold flex items-center gap-2 animate-in fade-in">
               <Check className="w-4 h-4 text-emerald-600 shrink-0" />
               <span>{shareSuccessToast}</span>
             </div>

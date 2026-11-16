@@ -83,7 +83,7 @@ export function saveOfflineQueue(queue: AttendanceRecord[]) {
 }
 
 export function addToOfflineQueue(record: AttendanceRecord) {
-  const queue = getOfflineQueue();
+  const queue = getOfflineQueue().filter((r) => r.id !== record.id);
   queue.push(record);
   saveOfflineQueue(queue);
 }
@@ -296,20 +296,41 @@ class BackendValidationError extends Error {
 }
 
 async function callBackendJson<T>(url: string, init?: RequestInit, defaultErrorMsg = 'ดำเนินการไม่สำเร็จ'): Promise<T> {
-  const res = await freshFetch(url, init);
-  const contentType = res.headers.get('content-type') || '';
-  const isJson = contentType.includes('application/json');
+  let lastErr: any;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const res = await freshFetch(url, init);
+      const contentType = res.headers.get('content-type') || '';
+      const isJson = contentType.includes('application/json');
 
-  if (res.ok && isJson) {
-    return (await res.json()) as T;
+      if (res.ok && isJson) {
+        return (await res.json()) as T;
+      }
+
+      if (isJson && res.status >= 400 && res.status < 500) {
+        const err = await res.json().catch(() => ({}));
+        throw new BackendValidationError(err.error || defaultErrorMsg, res.status);
+      }
+
+      lastErr = new Error(`HTTP ${res.status}`);
+      if (attempt === 0 && (res.status === 502 || res.status === 503 || res.status === 504)) {
+        await new Promise((r) => setTimeout(r, 600));
+        continue;
+      }
+      throw lastErr;
+    } catch (err) {
+      if (err instanceof BackendValidationError) {
+        throw err;
+      }
+      lastErr = err;
+      if (attempt === 0) {
+        await new Promise((r) => setTimeout(r, 600));
+        continue;
+      }
+      throw lastErr;
+    }
   }
-
-  if (isJson && res.status >= 400 && res.status < 500) {
-    const err = await res.json().catch(() => ({}));
-    throw new BackendValidationError(err.error || defaultErrorMsg, res.status);
-  }
-
-  throw new Error(`HTTP ${res.status}`);
+  throw lastErr || new Error(defaultErrorMsg);
 }
 
 // API Methods
@@ -634,8 +655,32 @@ export const api = {
     const idx = cachedUsers.findIndex((u) => u.id === id);
     if (idx !== -1) {
       cachedUsers[idx] = { ...cachedUsers[idx], ...updatedUser };
-      setCache(STORAGE_KEYS.CACHED_USERS, cachedUsers);
+    } else {
+      cachedUsers.push(updatedUser);
     }
+    setCache(STORAGE_KEYS.CACHED_USERS, cachedUsers);
+
+    const cachedAttendance = getCache<AttendanceRecord[]>(STORAGE_KEYS.CACHED_ATTENDANCE);
+    if (Array.isArray(cachedAttendance) && cachedAttendance.length > 0) {
+      let touched = false;
+      const nextAtt = cachedAttendance.map((r) => {
+        if (r.userId === id) {
+          touched = true;
+          return {
+            ...r,
+            userName: updatedUser.fullName,
+            userRole: updatedUser.role,
+            departmentId: updatedUser.departmentId,
+            departmentName: updatedUser.departmentName,
+          };
+        }
+        return r;
+      });
+      if (touched) {
+        setCache(STORAGE_KEYS.CACHED_ATTENDANCE, nextAtt);
+      }
+    }
+
     const cur = this.getCurrentUser();
     if (cur && cur.id === id) {
       this.setCurrentUser({ ...cur, ...updatedUser });
@@ -1124,6 +1169,7 @@ export const api = {
     }
 
     let syncedCount = 0;
+    let syncedRecords: AttendanceRecord[] = [];
     let handledViaBackend = false;
 
     try {
@@ -1141,10 +1187,11 @@ export const api = {
         if (data?.quotaLimited) {
           markClientQuotaLimited();
         }
+        syncedRecords = Array.isArray(data.records) ? data.records : queue;
         syncedCount = data.syncedCount ?? queue.length;
         if (!data.firestoreSynced && !data.quotaLimited && !isFirestoreQuotaLimited()) {
           try {
-            await syncAttendanceBatchToFirestore(data.records || queue);
+            await syncAttendanceBatchToFirestore(syncedRecords);
           } catch (fbErr) {
             console.warn('Firestore batch mirror notice:', fbErr);
           }
@@ -1163,7 +1210,21 @@ export const api = {
 
     if (!handledViaBackend) {
       const fbSaved = await syncAttendanceBatchToFirestore(queue);
-      syncedCount = fbSaved.length || queue.length;
+      syncedRecords = fbSaved.length > 0 ? fbSaved : queue;
+      syncedCount = syncedRecords.length;
+    }
+
+    // Merge synced records into CACHED_ATTENDANCE before evicting offline queue so UI never loses them
+    if (syncedRecords.length > 0) {
+      const existingAtt = getCache<AttendanceRecord[]>(STORAGE_KEYS.CACHED_ATTENDANCE) || [];
+      const mergedMap = new Map<string, AttendanceRecord>();
+      syncedRecords.forEach((r) => {
+        if (r && r.id) mergedMap.set(r.id, r);
+      });
+      existingAtt.forEach((r) => {
+        if (r && r.id && !mergedMap.has(r.id)) mergedMap.set(r.id, r);
+      });
+      setCache(STORAGE_KEYS.CACHED_ATTENDANCE, Array.from(mergedMap.values()));
     }
 
     // Safely remove only the synced items from the offline queue to prevent losing new entries
@@ -1282,7 +1343,7 @@ export const api = {
     const cleaned = cached.filter(
       (r) =>
         r.userId !== 'usr_somchai' &&
-        !(r.userName && r.userName.includes('สมชาย')) &&
+        r.userName !== 'สมชาย ใจดี' &&
         r.id !== 'att_1793678354265_gye2' &&
         r.id !== 'att_1791596015445_jm7c'
     );
@@ -1505,6 +1566,7 @@ export const api = {
   // Firebase Cloud Firestore Status & Full Sync
   async getFirebaseStatus(): Promise<{
     connected: boolean;
+    quotaLimited?: boolean;
     projectId: string;
     databaseId: string;
     status: string;
@@ -1523,9 +1585,10 @@ export const api = {
     }
     return {
       connected: false,
+      quotaLimited: isFirestoreQuotaLimited(),
       projectId: 'smart-time-ca6f9',
       databaseId: 'default',
-      status: 'offline',
+      status: isFirestoreQuotaLimited() ? 'quota_limited' : 'offline',
       cloudProtected: true,
       counts: {
         users: 57,
@@ -1536,7 +1599,7 @@ export const api = {
     };
   },
 
-  async syncFirebase(): Promise<{ success: boolean; message: string; counts: any }> {
+  async syncFirebase(): Promise<{ success: boolean; quotaLimited?: boolean; message: string; counts: any }> {
     const res = await freshFetch('/api/firebase-sync', { method: 'POST' });
     if (!res.ok) {
       throw new Error('ไม่สามารถเชื่อมต่อซิงค์กับ Cloud Firestore ได้');

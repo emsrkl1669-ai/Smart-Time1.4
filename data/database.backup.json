@@ -911,6 +911,23 @@
       "assignedLocationName": "มูลนิธิร่วมกุศล สมุทรปราการ (ศูนย์วิทยุบัวหลวง กู้ชีพกู้ภัย)",
       "employeeCode": "03",
       "phoneNumber": "094-781-0499"
+    },
+    {
+      "id": "usr_1794793142959_muvd",
+      "username": "persist_verify_temp",
+      "password": "pw_verify_1",
+      "fullName": "ทดสอบ หลังแก้ถาวร",
+      "role": "employee",
+      "departmentId": "dep_general",
+      "departmentName": "ทั่วไป",
+      "position": "Tester",
+      "assignedLocationId": "",
+      "assignedLocationName": "",
+      "phoneNumber": "",
+      "employeeCode": "TEST-999",
+      "status": "active",
+      "createdAt": "2026-11-16T01:39:02.959Z",
+      "updatedAt": "2026-11-16T01:39:03.224Z"
     }
   ],
   "departments": [
@@ -1073,31 +1090,6 @@
     }
   ],
   "attendance": [
-    {
-      "id": "att_1794704850555_dw5f",
-      "userId": "usr_009_prasert",
-      "userName": "นายประเสริฐ เหล่ายนขาม",
-      "userRole": "employee",
-      "departmentId": "dep_ems_rescue",
-      "departmentName": "กู้ชีพ-กู้ภัย",
-      "type": "check_in",
-      "timestamp": "2026-11-15T01:07:30.547Z",
-      "date": "2026-11-15",
-      "time": "08:07:30",
-      "photo": "data:image/jpeg;base64,/9j/4AAQSkZJRg==",
-      "latitude": 13.5781067,
-      "longitude": 100.594069,
-      "locationName": "มูลนิธิร่วมกุศล สมุทรปราการ (ศูนย์วิทยุบัวหลวง กู้ชีพกู้ภัย)",
-      "workLocationId": "loc_bualuang_hq",
-      "workLocationName": "มูลนิธิร่วมกุศล สมุทรปราการ (ศูนย์วิทยุบัวหลวง กู้ชีพกู้ภัย)",
-      "isWithinGeofence": true,
-      "distanceFromLocationMeters": 0,
-      "deviceOs": "desktop",
-      "note": "TEST_E2E_VERIFY",
-      "isOfflineRecord": false,
-      "lineNotificationStatus": "simulated",
-      "lineTargetDepartment": "กู้ชีพ-กู้ภัย"
-    },
     {
       "latitude": 13.5781067,
       "deviceOs": "desktop",
@@ -1531,6 +1523,17 @@
   },
   "lineLogs": [
     {
+      "id": "log_1794793143076_stm9r",
+      "timestamp": "2026-11-16T01:39:03.076Z",
+      "recipientDepartment": "กู้ภัย",
+      "tokenUsed": "โหมดจำลอง (ยังไม่ได้ใส่ Token)",
+      "type": "check_in",
+      "userName": "🟢 บันทึกเวลาเข้างาน (Check-In)",
+      "message": "\n🟢 บันทึกเวลาเข้างาน (Check-In)\n👤 ผู้ลงเวลา: ทดสอบ ก่อนแก้ (TEST-999)\n🏢 แผนก/กลุ่ม: กู้ภัย\n🏷️ สถานะ: 💼 พนักงาน\n⏰ เวลา (ประเทศไทย): วันจันทร์ที่ 16 พฤศจิกายน 2569 เวลา 08:39:03 น.\n📍 สถานที่: Test HQ\n🎯 จุดปฏิบัติงาน: มูลนิธิร่วมกุศล สมุทรปราการ (ศูนย์วิทยุบัวหลวง กู้ชีพกู้ภัย) (⚠️ อยู่นอกรัศมี 54988 ม.)\n🌐 พิกัด GPS: 14.072500, 100.605600\n📝 หมายเหตุ/ภารกิจ: persistence verification\n🗺️ ดูแผนที่: https://www.google.com/maps?q=14.0725,100.6056",
+      "status": "simulated",
+      "responseDetails": "จำลองสำเร็จ (ใส่ Token ในเมนูตั้งค่า LINE หรือ แผนก เพื่อส่งเข้ากลุ่ม LINE จริง)"
+    },
+    {
       "id": "log_1794704850555_xw8ph",
       "timestamp": "2026-11-15T01:07:30.555Z",
       "recipientDepartment": "กู้ชีพ-กู้ภัย",
@@ -1695,5 +1698,14 @@
       "status": "simulated",
       "responseDetails": "System Ready"
     }
-  ]
+  ],
+  "deletedIds": {
+    "users": {},
+    "departments": {},
+    "locations": {},
+    "attendance": {
+      "att_1794793143076_69w9": "2026-11-16T01:39:17.773Z"
+    }
+  },
+  "lastSavedAt": "2026-11-16T01:39:17.773Z"
 }

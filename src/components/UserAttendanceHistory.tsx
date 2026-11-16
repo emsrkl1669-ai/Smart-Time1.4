@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { AttendanceRecord } from '../types';
 import { Clock, MapPin, Calendar, ExternalLink, X, Image as ImageIcon, WifiOff, Download } from 'lucide-react';
+import { triggerBrowserDownload } from '../utils/export';
 
 interface UserAttendanceHistoryProps {
   records: AttendanceRecord[];
@@ -17,12 +18,10 @@ export const UserAttendanceHistory: React.FC<UserAttendanceHistoryProps> = ({ re
   const handleDownloadPhoto = (rec: AttendanceRecord) => {
     if (!rec.photo) return;
     const safeName = (rec.userName || 'photo').replace(/[^a-zA-Z0-9ก-๙_-]/g, '_');
-    const a = document.createElement('a');
-    a.href = rec.photo;
-    a.download = `SmartTime-${safeName}-${rec.date || 'capture'}-${(rec.time || '').replace(/:/g, '')}.jpg`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
+    triggerBrowserDownload(
+      rec.photo,
+      `SmartTime-${safeName}-${rec.date || 'capture'}-${(rec.time || '').replace(/:/g, '')}.jpg`
+    );
   };
 
   return (
