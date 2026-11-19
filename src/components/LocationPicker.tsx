@@ -272,9 +272,9 @@ export const LocationPicker: React.FC<LocationPickerProps> = ({
   const selectedLocationObj = mandatoryLoc;
 
   return (
-    <div className="bg-white rounded-2xl p-4 border border-slate-200 shadow-xs space-y-3.5">
+    <div className="bg-white rounded-2xl p-3 sm:p-4 border border-slate-200 shadow-xs space-y-3.5 w-full min-w-0">
       {/* Header with Title & Refresh button */}
-      <div className="flex items-center justify-between gap-2">
+      <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="flex items-center gap-2 min-w-0">
           <div className="p-2 bg-indigo-50 text-indigo-600 rounded-xl shrink-0">
             <MapPin className="w-4 h-4" />
@@ -335,7 +335,7 @@ export const LocationPicker: React.FC<LocationPickerProps> = ({
       {/* Embedded Live Map Preview Anchored to LOC-BUALUANG-HQ */}
       {selectedLocationObj && (
         <div className="rounded-2xl overflow-hidden border border-slate-200 shadow-2xs relative bg-slate-100">
-          <div className="relative w-full h-44 sm:h-52">
+          <div className="relative w-full h-40 sm:h-52 lg:h-56">
             <iframe
               key={`map-${selectedLocationObj.id}-${selectedLocationObj.latitude}-${selectedLocationObj.longitude}`}
               title={`พิกัดหมุด ${selectedLocationObj.name}`}
@@ -367,7 +367,7 @@ export const LocationPicker: React.FC<LocationPickerProps> = ({
         <div className="space-y-2">
           {/* Geofence & Proximity Status Badge */}
           <div
-            className={`p-2.5 rounded-xl text-xs flex items-center justify-between border ${
+            className={`p-2.5 rounded-xl text-xs flex flex-wrap sm:flex-nowrap items-center justify-between gap-2 border ${
               location.isWithinGeofence
                 ? 'bg-emerald-50 border-emerald-200 text-emerald-900'
                 : 'bg-amber-50 border-amber-200 text-amber-900'

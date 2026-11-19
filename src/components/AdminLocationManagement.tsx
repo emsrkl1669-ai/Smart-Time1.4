@@ -238,7 +238,7 @@ export const AdminLocationManagement: React.FC<AdminLocationManagementProps> = (
   };
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-4 sm:space-y-5 w-full min-w-0">
       {toastMsg && (
         <div
           className={`p-3.5 rounded-2xl border text-xs font-semibold flex items-center justify-between gap-2 ${
@@ -266,7 +266,7 @@ export const AdminLocationManagement: React.FC<AdminLocationManagementProps> = (
       )}
 
       {/* Top Header Card */}
-      <div className="bg-white p-5 rounded-2xl border border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-4 shadow-xs">
+      <div className="bg-white p-4 sm:p-5 rounded-2xl border border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3 sm:gap-4 shadow-xs">
         <div>
           <h2 className="text-base sm:text-lg font-bold text-slate-800 flex items-center gap-2">
             <Compass className="w-5 h-5 text-indigo-600" />
@@ -328,12 +328,12 @@ export const AdminLocationManagement: React.FC<AdminLocationManagementProps> = (
           </button>
         </div>
       ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
           {filteredLocations.map((loc) => {
             return (
               <div
                 key={loc.id}
-                className="bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-xs hover:border-slate-300 transition flex flex-col"
+                className="bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-xs hover:border-slate-300 transition flex flex-col min-w-0"
               >
                 {/* Header with Title and Status */}
                 <div className="p-4 border-b border-slate-100 flex items-start justify-between gap-3">
@@ -431,8 +431,8 @@ export const AdminLocationManagement: React.FC<AdminLocationManagementProps> = (
       {/* MODAL: ADD / EDIT WORK LOCATION */}
       {isModalOpen && (
         <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4 overflow-y-auto">
-          <div className="bg-white rounded-3xl max-w-lg w-full overflow-hidden shadow-2xl animate-in fade-in zoom-in-95 duration-200">
-            <div className="p-4 sm:p-5 border-b border-slate-100 flex items-center justify-between bg-slate-50">
+          <div className="bg-white rounded-3xl max-w-lg w-full overflow-hidden shadow-2xl animate-in fade-in zoom-in-95 duration-200 max-h-[92dvh] flex flex-col my-auto">
+            <div className="p-4 sm:p-5 border-b border-slate-100 flex items-center justify-between bg-slate-50 shrink-0">
               <h3 className="font-bold text-slate-800 text-sm sm:text-base flex items-center gap-2">
                 <MapPin className="w-4 h-4 text-indigo-600" />
                 <span>{editingLocation ? 'แก้ไขตำแหน่งจุดปฏิบัติงาน' : 'กำหนดจุดปฏิบัติงานใหม่'}</span>
@@ -440,13 +440,13 @@ export const AdminLocationManagement: React.FC<AdminLocationManagementProps> = (
               <button
                 type="button"
                 onClick={() => setIsModalOpen(false)}
-                className="p-1 text-slate-400 hover:text-slate-600 rounded-lg hover:bg-slate-200"
+                className="p-1.5 text-slate-400 hover:text-slate-600 rounded-lg hover:bg-slate-200 cursor-pointer"
               >
                 <X className="w-5 h-5" />
               </button>
             </div>
 
-            <form onSubmit={handleSaveLocation} className="p-4 sm:p-6 space-y-4 max-h-[80vh] overflow-y-auto">
+            <form onSubmit={handleSaveLocation} className="p-4 sm:p-6 space-y-4 overflow-y-auto flex-1">
               {errorMsg && (
                 <div className="p-3 bg-rose-50 border border-rose-200 text-rose-700 text-xs rounded-xl flex items-center gap-2">
                   <AlertCircle className="w-4 h-4 shrink-0" />
@@ -455,8 +455,8 @@ export const AdminLocationManagement: React.FC<AdminLocationManagementProps> = (
               )}
 
               {/* Location Name & Code */}
-              <div className="grid grid-cols-3 gap-3">
-                <div className="col-span-2">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div className="sm:col-span-2">
                   <label className="block text-xs font-semibold text-slate-700 mb-1">
                     ชื่อจุดปฏิบัติงาน *
                   </label>
@@ -485,7 +485,7 @@ export const AdminLocationManagement: React.FC<AdminLocationManagementProps> = (
               </div>
 
               {/* Department Assignment */}
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="block text-xs font-semibold text-slate-700 mb-1">
                     แผนกที่รับผิดชอบ
@@ -541,7 +541,7 @@ export const AdminLocationManagement: React.FC<AdminLocationManagementProps> = (
 
               {/* Search Place or Location in Thailand */}
               <div className="bg-slate-50 p-3 rounded-2xl border border-slate-200 space-y-2">
-                <div className="flex items-center justify-between">
+                <div className="flex flex-wrap items-center justify-between gap-2">
                   <span className="text-xs font-semibold text-slate-700 flex items-center gap-1.5">
                     <Search className="w-3.5 h-3.5 text-indigo-600" />
                     <span>ค้นหาพิกัดสถานที่ในประเทศไทย</span>
@@ -550,7 +550,7 @@ export const AdminLocationManagement: React.FC<AdminLocationManagementProps> = (
                     type="button"
                     onClick={handleGetCurrentGps}
                     disabled={isGettingGps}
-                    className="text-[11px] font-semibold text-emerald-700 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 px-2.5 py-1 rounded-lg flex items-center gap-1 transition cursor-pointer"
+                    className="text-[11px] font-semibold text-emerald-700 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 px-2.5 py-1 rounded-lg flex items-center gap-1 transition cursor-pointer shrink-0"
                   >
                     <Crosshair className={`w-3 h-3 ${isGettingGps ? 'animate-spin' : ''}`} />
                     <span>{isGettingGps ? 'กำลังค้นหา...' : 'ใช้พิกัด GPS ปัจจุบัน'}</span>
@@ -569,13 +569,13 @@ export const AdminLocationManagement: React.FC<AdminLocationManagementProps> = (
                       }
                     }}
                     placeholder="พิมพ์ชื่อสถานที่ เช่น อนุสาวรีย์ชัยสมรภูมิ, รพ.รามา..."
-                    className="flex-1 text-xs p-2 bg-white rounded-xl border border-slate-200 focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+                    className="flex-1 min-w-0 text-xs p-2 bg-white rounded-xl border border-slate-200 focus:ring-2 focus:ring-indigo-500 focus:outline-none"
                   />
                   <button
                     type="button"
                     onClick={handleSearchAddress}
                     disabled={isSearchingAddress}
-                    className="px-3 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold rounded-xl transition cursor-pointer"
+                    className="px-3 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold rounded-xl transition cursor-pointer shrink-0"
                   >
                     {isSearchingAddress ? 'ค้น...' : 'ค้นหา'}
                   </button>
@@ -599,7 +599,7 @@ export const AdminLocationManagement: React.FC<AdminLocationManagementProps> = (
               </div>
 
               {/* Coordinates Inputs */}
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="block text-xs font-semibold text-slate-700 mb-1">
                     ละติจูด (Latitude) *

@@ -212,19 +212,19 @@ export const ShareAppModal: React.FC<ShareAppModalProps> = ({
   });
 
   return (
-    <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4 overflow-y-auto animate-in fade-in">
-      <div className="bg-white rounded-3xl max-w-xl w-full overflow-hidden shadow-2xl border border-slate-100 flex flex-col my-auto max-h-[92vh]">
+    <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-xs flex items-center justify-center p-2.5 sm:p-4 overflow-y-auto animate-in fade-in">
+      <div className="bg-white rounded-3xl max-w-xl w-full overflow-hidden shadow-2xl border border-slate-100 flex flex-col my-auto max-h-[92dvh]">
         {/* Header */}
-        <div className="p-4 sm:p-5 bg-gradient-to-r from-slate-900 via-indigo-950 to-slate-900 text-white flex items-center justify-between shrink-0">
-          <div className="flex items-center gap-2.5">
-            <div className="p-2 bg-indigo-500/30 rounded-xl border border-indigo-400/30">
+        <div className="p-3.5 sm:p-5 bg-gradient-to-r from-slate-900 via-indigo-950 to-slate-900 text-white flex items-center justify-between gap-2 shrink-0">
+          <div className="flex items-center gap-2.5 min-w-0">
+            <div className="p-2 bg-indigo-500/30 rounded-xl border border-indigo-400/30 shrink-0">
               <QrCode className="w-5 h-5 text-indigo-300" />
             </div>
-            <div>
-              <h3 className="font-bold text-base leading-tight">
+            <div className="min-w-0">
+              <h3 className="font-bold text-sm sm:text-base leading-tight truncate">
                 แชร์ลิงก์ & คิวอาร์โค้ดส่งต่อผู้ใช้งาน
               </h3>
-              <p className="text-[11px] text-slate-300">
+              <p className="text-[11px] text-slate-300 truncate">
                 เข้าสู่ระบบได้จากทุกเครื่อง ทุกอุปกรณ์อย่างปลอดภัยและเป็นความลับ
               </p>
             </div>
@@ -232,37 +232,37 @@ export const ShareAppModal: React.FC<ShareAppModalProps> = ({
           <button
             type="button"
             onClick={onClose}
-            className="p-1.5 text-slate-400 hover:text-white rounded-xl transition cursor-pointer"
+            className="p-1.5 text-slate-400 hover:text-white rounded-xl transition cursor-pointer shrink-0"
           >
             <X className="w-5 h-5" />
           </button>
         </div>
 
         {/* Tab Switcher */}
-        <div className="p-2 bg-slate-100 border-b border-slate-200 flex items-center gap-1.5 shrink-0 text-xs">
+        <div className="p-2 bg-slate-100 border-b border-slate-200 grid grid-cols-1 sm:grid-cols-2 gap-1.5 shrink-0 text-[11px] sm:text-xs">
           <button
             type="button"
             onClick={() => setActiveTab('share')}
-            className={`flex-1 py-2 px-3 rounded-xl font-bold flex items-center justify-center gap-2 transition cursor-pointer ${
+            className={`py-2 px-3 rounded-xl font-bold flex items-center justify-center gap-1.5 transition cursor-pointer ${
               activeTab === 'share'
                 ? 'bg-white text-indigo-700 shadow-xs'
                 : 'text-slate-600 hover:text-slate-900'
             }`}
           >
-            <QrCode className="w-4 h-4 text-indigo-600" />
+            <QrCode className="w-4 h-4 text-indigo-600 shrink-0" />
             <span>1. คิวอาร์โค้ด & ลิงก์ระบบกลาง</span>
           </button>
           <button
             type="button"
             onClick={() => setActiveTab('credentials')}
-            className={`flex-1 py-2 px-3 rounded-xl font-bold flex items-center justify-center gap-2 transition cursor-pointer ${
+            className={`py-2 px-3 rounded-xl font-bold flex items-center justify-center gap-1.5 transition cursor-pointer ${
               activeTab === 'credentials'
                 ? 'bg-white text-indigo-700 shadow-xs'
                 : 'text-slate-600 hover:text-slate-900'
             }`}
           >
-            <Lock className="w-4 h-4 text-emerald-600" />
-            <span>2. ส่งรหัส & แนบลิงก์ (ความลับเฉพาะบุคคล)</span>
+            <Lock className="w-4 h-4 text-emerald-600 shrink-0" />
+            <span>2. ส่งรหัส & แนบลิงก์ (เฉพาะบุคคล)</span>
           </button>
         </div>
 
@@ -329,7 +329,7 @@ export const ShareAppModal: React.FC<ShareAppModalProps> = ({
               </div>
 
               {/* Action Buttons */}
-              <div className="grid grid-cols-2 gap-2.5">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
                 {appQrUrl && (
                   <a
                     href={appQrUrl}
@@ -413,7 +413,7 @@ export const ShareAppModal: React.FC<ShareAppModalProps> = ({
                 </div>
 
                 {/* Profile Grid */}
-                <div className="grid grid-cols-2 gap-3 text-xs mb-3">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 sm:gap-3 text-xs mb-3">
                   <div>
                     <span className="text-[10px] text-slate-400 block">ชื่อ-นามสกุล</span>
                     <span className="font-semibold text-white">{selectedUser.fullName}</span>
@@ -530,7 +530,7 @@ export const ShareAppModal: React.FC<ShareAppModalProps> = ({
                   </span>
                 </button>
 
-                <div className="grid grid-cols-2 gap-2">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                   <button
                     type="button"
                     onClick={() => handleWebShare(true)}
@@ -557,7 +557,7 @@ export const ShareAppModal: React.FC<ShareAppModalProps> = ({
         </div>
 
         {/* Footer */}
-        <div className="p-3 bg-slate-50 border-t border-slate-100 flex items-center justify-between text-[11px] text-slate-500 shrink-0">
+        <div className="p-3 bg-slate-50 border-t border-slate-100 flex flex-wrap items-center justify-between gap-2 text-[11px] text-slate-500 shrink-0">
           <span className="flex items-center gap-1">
             <ShieldCheck className="w-3.5 h-3.5 text-emerald-600" />
             ระบบฐานข้อมูลกลาง ซิงค์อัตโนมัติทุกอุปกรณ์

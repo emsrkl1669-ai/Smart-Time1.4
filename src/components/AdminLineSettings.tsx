@@ -189,19 +189,19 @@ export const AdminLineSettings: React.FC<AdminLineSettingsProps> = ({
   };
 
   return (
-    <div className="bg-white rounded-3xl border border-slate-200 overflow-hidden shadow-xs p-5 sm:p-6 space-y-6">
+    <div className="bg-white rounded-3xl border border-slate-200 overflow-hidden shadow-xs p-3.5 sm:p-6 space-y-5 sm:space-y-6 w-full min-w-0">
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-100">
-        <div>
+        <div className="min-w-0">
           <h3 className="text-base sm:text-lg font-bold text-slate-800 flex items-center gap-2">
-            <Settings2 className="w-5 h-5 text-emerald-600" /> ตั้งค่าระบบองค์กร & LINE Notify รายแผนก
+            <Settings2 className="w-5 h-5 text-emerald-600 shrink-0" /> ตั้งค่าระบบองค์กร & LINE Notify รายแผนก
           </h3>
           <p className="text-xs text-slate-500 mt-0.5">
             Admin สามารถแก้ไขข้อมูลองค์กร เวลามาตรฐาน กฎการลงเวลา และ LINE Token ของแต่ละกลุ่มได้ทั้งหมด
           </p>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2 shrink-0">
           {hasUnsavedChanges && (
             <button
               type="button"
@@ -240,9 +240,9 @@ export const AdminLineSettings: React.FC<AdminLineSettingsProps> = ({
       <form onSubmit={handleSaveAll} className="space-y-6">
         {/* General Organization & Attendance Settings */}
         <div className="bg-indigo-50/40 p-4 sm:p-5 rounded-2xl border border-indigo-100 space-y-4">
-          <div className="flex items-center justify-between">
+          <div className="flex flex-wrap items-center justify-between gap-1.5">
             <h4 className="text-xs sm:text-sm font-bold text-slate-800 flex items-center gap-1.5">
-              <Clock className="w-4 h-4 text-indigo-600" />
+              <Clock className="w-4 h-4 text-indigo-600 shrink-0" />
               <span>ตั้งค่าองค์กร เวลามาตรฐาน และเงื่อนไขการลงเวลา</span>
             </h4>
             <span className="text-[11px] text-indigo-600 font-medium">มีผลทันทีทุกเครื่อง</span>
@@ -354,9 +354,9 @@ export const AdminLineSettings: React.FC<AdminLineSettingsProps> = ({
 
         {/* Main Fallback Token */}
         <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200 space-y-2">
-          <div className="flex items-center justify-between">
+          <div className="flex flex-wrap items-center justify-between gap-1.5">
             <label className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
-              <Key className="w-4 h-4 text-slate-500" />
+              <Key className="w-4 h-4 text-slate-500 shrink-0" />
               <span>LINE Notify Token ส่วนกลาง (Global Default Token)</span>
             </label>
             <span className="text-[11px] text-slate-500">สำรองกรณีแผนกไม่ได้ระบุ Token</span>
@@ -391,7 +391,7 @@ export const AdminLineSettings: React.FC<AdminLineSettingsProps> = ({
             </div>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
             {departments.map((dept) => {
               const val = departmentTokens[dept.id] ?? '';
               return (

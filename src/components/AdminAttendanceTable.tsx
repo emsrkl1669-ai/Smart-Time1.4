@@ -424,7 +424,7 @@ export const AdminAttendanceTable: React.FC<AdminAttendanceTableProps> = ({
   const inGeofenceCount = records.filter((r) => r.isWithinGeofence).length;
 
   return (
-    <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-xs space-y-4 p-4 sm:p-5">
+    <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-xs space-y-4 p-3.5 sm:p-5 w-full min-w-0">
       {/* Toast Feedback */}
       {feedbackToast && (
         <div
@@ -547,7 +547,7 @@ export const AdminAttendanceTable: React.FC<AdminAttendanceTableProps> = ({
       </div>
 
       {/* KPI Summary Cards */}
-      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2.5">
+      <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-5 gap-2.5">
         <div className="p-3 rounded-xl bg-slate-50 border border-slate-200">
           <div className="text-[10px] font-semibold text-slate-500 uppercase tracking-wider">บันทึกทั้งหมด</div>
           <div className="text-lg font-black text-slate-900 mt-0.5">{totalCount} <span className="text-xs font-normal text-slate-500">ครั้ง</span></div>
@@ -683,8 +683,8 @@ export const AdminAttendanceTable: React.FC<AdminAttendanceTableProps> = ({
 
       {/* Custom Date Pickers */}
       {dateFilterMode === 'custom' && (
-        <div className="flex items-center gap-3 p-3 bg-indigo-50/60 rounded-xl border border-indigo-100 text-xs">
-          <Calendar className="w-4 h-4 text-indigo-600" />
+        <div className="flex flex-wrap items-center gap-2.5 sm:gap-3 p-3 bg-indigo-50/60 rounded-xl border border-indigo-100 text-xs">
+          <Calendar className="w-4 h-4 text-indigo-600 shrink-0" />
           <div className="flex items-center gap-2">
             <span>ตั้งแต่วันที่:</span>
             <input
@@ -707,7 +707,7 @@ export const AdminAttendanceTable: React.FC<AdminAttendanceTableProps> = ({
       )}
 
       {/* Search & Select Filters */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-2.5">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5">
         <div className="relative">
           <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
           <input
@@ -975,10 +975,10 @@ export const AdminAttendanceTable: React.FC<AdminAttendanceTableProps> = ({
           onClick={() => setSelectedPhotoRecord(null)}
         >
           <div
-            className="bg-white rounded-3xl max-w-5xl w-full overflow-hidden shadow-2xl relative border border-slate-200 flex flex-col max-h-[94vh]"
+            className="bg-white rounded-3xl max-w-5xl w-full overflow-hidden shadow-2xl relative border border-slate-200 flex flex-col max-h-[92dvh]"
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="p-4 sm:px-6 flex items-center justify-between border-b border-slate-100 bg-slate-50">
+            <div className="p-4 sm:px-6 flex items-center justify-between border-b border-slate-100 bg-slate-50 shrink-0">
               <div className="min-w-0">
                 <div className="flex items-center gap-2 flex-wrap">
                   <h4 className="text-sm sm:text-base font-bold text-slate-900 truncate">
@@ -1012,15 +1012,15 @@ export const AdminAttendanceTable: React.FC<AdminAttendanceTableProps> = ({
               </button>
             </div>
 
-            <div className="p-3 sm:p-5 bg-slate-950 flex items-center justify-center overflow-auto flex-1">
+            <div className="p-3 sm:p-5 bg-slate-950 flex items-center justify-center overflow-auto flex-1 min-h-0">
               <img
                 src={selectedPhotoRecord.photo}
                 alt={`รูปภาพยืนยันตัวตน ${selectedPhotoRecord.userName}`}
-                className="w-full h-auto max-h-[75vh] object-contain rounded-2xl shadow-2xl"
+                className="w-full h-auto max-h-[70dvh] object-contain rounded-2xl shadow-2xl"
               />
             </div>
 
-            <div className="p-3.5 sm:px-6 bg-slate-50 border-t border-slate-100 flex flex-wrap items-center justify-between gap-2">
+            <div className="p-3.5 sm:px-6 bg-slate-50 border-t border-slate-100 flex flex-wrap items-center justify-between gap-2 shrink-0">
               <div className="text-xs text-slate-500 font-mono">
                 GPS: {Number.isFinite(Number(selectedPhotoRecord.latitude)) ? Number(selectedPhotoRecord.latitude).toFixed(6) : '-'}, {Number.isFinite(Number(selectedPhotoRecord.longitude)) ? Number(selectedPhotoRecord.longitude).toFixed(6) : '-'}
               </div>
@@ -1048,11 +1048,11 @@ export const AdminAttendanceTable: React.FC<AdminAttendanceTableProps> = ({
 
       {/* Modal: Location Map */}
       {selectedLocation && (
-        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white rounded-3xl max-w-lg w-full overflow-hidden shadow-2xl relative">
-            <div className="p-4 flex items-center justify-between border-b border-slate-100">
-              <div>
-                <h4 className="text-sm font-bold text-slate-800">
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4">
+          <div className="bg-white rounded-3xl max-w-lg w-full overflow-hidden shadow-2xl relative flex flex-col max-h-[92dvh]">
+            <div className="p-4 flex items-center justify-between border-b border-slate-100 shrink-0 gap-2">
+              <div className="min-w-0">
+                <h4 className="text-sm font-bold text-slate-800 truncate">
                   พิกัดลงเวลา: {selectedLocation.userName} ({selectedLocation.time})
                 </h4>
                 <p className="text-xs text-slate-500 line-clamp-1">{selectedLocation.name}</p>
@@ -1060,12 +1060,12 @@ export const AdminAttendanceTable: React.FC<AdminAttendanceTableProps> = ({
               <button
                 type="button"
                 onClick={() => setSelectedLocation(null)}
-                className="p-1 text-slate-400 hover:text-slate-600 rounded-lg"
+                className="p-1 text-slate-400 hover:text-slate-600 rounded-lg shrink-0"
               >
                 <X className="w-5 h-5" />
               </button>
             </div>
-            <div className="h-72 w-full bg-slate-100 relative">
+            <div className="h-60 sm:h-72 w-full bg-slate-100 relative shrink-0">
               <iframe
                 title="Location Map"
                 width="100%"
@@ -1078,7 +1078,7 @@ export const AdminAttendanceTable: React.FC<AdminAttendanceTableProps> = ({
                 className="w-full h-full"
               />
             </div>
-            <div className="p-4 bg-slate-50 flex items-center justify-between">
+            <div className="p-4 bg-slate-50 flex flex-wrap items-center justify-between gap-2 shrink-0">
               <a
                 href={`https://www.google.com/maps?q=${selectedLocation.lat},${selectedLocation.lng}`}
                 target="_blank"
@@ -1101,19 +1101,19 @@ export const AdminAttendanceTable: React.FC<AdminAttendanceTableProps> = ({
 
       {/* Modal: Manual Attendance Record by Admin (บันทึกเวลาแทนบุคลากร/อาสาสมัคร) */}
       {showManualModal && (
-        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-xs flex items-center justify-center p-4 overflow-y-auto">
-          <div className="bg-white rounded-3xl max-w-lg w-full overflow-hidden shadow-2xl relative my-6 border border-slate-200">
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4">
+          <div className="bg-white rounded-3xl max-w-lg w-full overflow-hidden shadow-2xl relative border border-slate-200 flex flex-col max-h-[92dvh]">
             {/* Header */}
-            <div className="p-4 sm:p-5 flex items-center justify-between border-b border-slate-100 bg-gradient-to-r from-emerald-50 via-teal-50 to-sky-50">
-              <div className="flex items-center gap-2.5">
-                <div className="w-10 h-10 rounded-2xl bg-emerald-600 text-white flex items-center justify-center shadow-md">
+            <div className="p-4 sm:p-5 flex items-center justify-between border-b border-slate-100 bg-gradient-to-r from-emerald-50 via-teal-50 to-sky-50 shrink-0 gap-2">
+              <div className="flex items-center gap-2.5 min-w-0">
+                <div className="w-10 h-10 rounded-2xl bg-emerald-600 text-white flex items-center justify-center shadow-md shrink-0">
                   <UserCheck className="w-5 h-5" />
                 </div>
-                <div>
-                  <h4 className="text-sm sm:text-base font-bold text-slate-900">
+                <div className="min-w-0">
+                  <h4 className="text-sm sm:text-base font-bold text-slate-900 truncate">
                     บันทึกเวลาเข้า-ออกงานแทนบุคลากร
                   </h4>
-                  <p className="text-[11px] text-slate-500">
+                  <p className="text-[11px] text-slate-500 truncate">
                     บันทึกข้อมูลพนักงาน/อาสา พร้อมจัดเก็บถาวรเข้าฐานข้อมูลกลาง
                   </p>
                 </div>
@@ -1121,13 +1121,13 @@ export const AdminAttendanceTable: React.FC<AdminAttendanceTableProps> = ({
               <button
                 type="button"
                 onClick={() => setShowManualModal(false)}
-                className="p-1.5 text-slate-400 hover:text-slate-600 hover:bg-white rounded-xl transition cursor-pointer"
+                className="p-1.5 text-slate-400 hover:text-slate-600 hover:bg-white rounded-xl transition cursor-pointer shrink-0"
               >
                 <X className="w-5 h-5" />
               </button>
             </div>
 
-            <form onSubmit={handleManualAttendanceSubmit} className="p-5 sm:p-6 space-y-4">
+            <form onSubmit={handleManualAttendanceSubmit} className="p-4 sm:p-6 space-y-4 overflow-y-auto flex-1">
               {/* Personnel Selector */}
               <div>
                 <label className="block text-xs font-semibold text-slate-700 mb-1.5">
@@ -1166,7 +1166,7 @@ export const AdminAttendanceTable: React.FC<AdminAttendanceTableProps> = ({
                 <label className="block text-xs font-semibold text-slate-700 mb-1.5">
                   ประเภทการลงเวลา <span className="text-rose-500">*</span>
                 </label>
-                <div className="grid grid-cols-2 gap-3">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 sm:gap-3">
                   <button
                     type="button"
                     onClick={() => setManualForm((prev) => ({ ...prev, type: 'check_in' }))}
@@ -1248,7 +1248,7 @@ export const AdminAttendanceTable: React.FC<AdminAttendanceTableProps> = ({
                     ⏰ ใช้วันเวลาปัจจุบัน
                   </button>
                 </div>
-                <div className="grid grid-cols-2 gap-2">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                   <div>
                     <label className="block text-[11px] text-slate-500 mb-1">วันที่ (YYYY-MM-DD)</label>
                     <input
@@ -1326,27 +1326,27 @@ export const AdminAttendanceTable: React.FC<AdminAttendanceTableProps> = ({
 
       {/* Modal: Edit Attendance Record (Admin) */}
       {editingRecord && (
-        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-xs flex items-center justify-center p-4 overflow-y-auto">
-          <div className="bg-white rounded-3xl max-w-lg w-full overflow-hidden shadow-2xl relative">
-            <div className="p-4 flex items-center justify-between border-b border-slate-100 bg-slate-50">
-              <div>
-                <h4 className="text-sm font-bold text-slate-800">
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4">
+          <div className="bg-white rounded-3xl max-w-lg w-full overflow-hidden shadow-2xl relative flex flex-col max-h-[92dvh]">
+            <div className="p-4 flex items-center justify-between border-b border-slate-100 bg-slate-50 shrink-0 gap-2">
+              <div className="min-w-0">
+                <h4 className="text-sm font-bold text-slate-800 truncate">
                   แก้ไขข้อมูลการลงเวลา: {editingRecord.userName}
                 </h4>
-                <p className="text-[11px] text-slate-500">
+                <p className="text-[11px] text-slate-500 truncate">
                   ID: {editingRecord.id} • แก้ไขได้ทุกฟิลด์โดย Admin
                 </p>
               </div>
               <button
                 type="button"
                 onClick={() => setEditingRecord(null)}
-                className="p-1 text-slate-400 hover:text-slate-600 rounded-lg cursor-pointer"
+                className="p-1 text-slate-400 hover:text-slate-600 rounded-lg cursor-pointer shrink-0"
               >
                 <X className="w-5 h-5" />
               </button>
             </div>
 
-            <form onSubmit={handleSaveEdit} className="p-5 space-y-4 max-h-[82vh] overflow-y-auto">
+            <form onSubmit={handleSaveEdit} className="p-4 sm:p-5 space-y-4 overflow-y-auto flex-1">
               {editError && (
                 <div className="p-3 bg-rose-50 border border-rose-200 text-rose-700 text-xs rounded-xl flex items-center gap-2">
                   <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0" />
@@ -1404,7 +1404,7 @@ export const AdminAttendanceTable: React.FC<AdminAttendanceTableProps> = ({
                 <label className="block text-xs font-semibold text-slate-700 mb-1">
                   ประเภทการลงเวลา
                 </label>
-                <div className="grid grid-cols-2 gap-2">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                   <button
                     type="button"
                     onClick={() => setEditForm((prev) => ({ ...prev, type: 'check_in' }))}
@@ -1431,7 +1431,7 @@ export const AdminAttendanceTable: React.FC<AdminAttendanceTableProps> = ({
               </div>
 
               {/* Date & Time */}
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="block text-xs font-semibold text-slate-700 mb-1">
                     วันที่ (YYYY-MM-DD)
@@ -1501,7 +1501,7 @@ export const AdminAttendanceTable: React.FC<AdminAttendanceTableProps> = ({
                 />
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="block text-xs font-semibold text-slate-700 mb-1">
                     ละติจูด (Latitude)
@@ -1567,16 +1567,16 @@ export const AdminAttendanceTable: React.FC<AdminAttendanceTableProps> = ({
 
       {/* Restore Backup Modal */}
       {showRestoreModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-xs">
-          <div className="bg-white rounded-3xl max-w-lg w-full p-5 sm:p-6 shadow-2xl space-y-4 border border-slate-200">
-            <div className="flex items-center justify-between pb-3 border-b border-slate-100">
-              <div className="flex items-center gap-2">
-                <div className="w-8 h-8 rounded-xl bg-sky-100 flex items-center justify-center text-sky-600">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/50 backdrop-blur-xs">
+          <div className="bg-white rounded-3xl max-w-lg w-full p-4 sm:p-6 shadow-2xl border border-slate-200 flex flex-col max-h-[92dvh] gap-4">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100 shrink-0 gap-2">
+              <div className="flex items-center gap-2 min-w-0">
+                <div className="w-8 h-8 rounded-xl bg-sky-100 flex items-center justify-center text-sky-600 shrink-0">
                   <Upload className="w-4 h-4" />
                 </div>
-                <div>
-                  <h4 className="text-sm font-bold text-slate-900">กู้คืนประวัติการลงเวลาจากไฟล์สำรอง</h4>
-                  <p className="text-[11px] text-slate-500">เลือกไฟล์ .json หรือวางข้อมูลเพื่อกู้คืนเข้าสู่ฐานข้อมูลกลาง</p>
+                <div className="min-w-0">
+                  <h4 className="text-sm font-bold text-slate-900 truncate">กู้คืนประวัติการลงเวลาจากไฟล์สำรอง</h4>
+                  <p className="text-[11px] text-slate-500 truncate">เลือกไฟล์ .json หรือวางข้อมูลเพื่อกู้คืนเข้าสู่ฐานข้อมูลกลาง</p>
                 </div>
               </div>
               <button
@@ -1586,13 +1586,13 @@ export const AdminAttendanceTable: React.FC<AdminAttendanceTableProps> = ({
                   setRestoreJsonInput('');
                   setRestoreError(null);
                 }}
-                className="text-slate-400 hover:text-slate-600 p-1 cursor-pointer"
+                className="text-slate-400 hover:text-slate-600 p-1 cursor-pointer shrink-0"
               >
                 <X className="w-4 h-4" />
               </button>
             </div>
 
-            <form onSubmit={handleRestoreSubmit} className="space-y-4">
+            <form onSubmit={handleRestoreSubmit} className="space-y-4 overflow-y-auto flex-1 pr-0.5">
               {restoreError && (
                 <div className="p-3 bg-rose-50 border border-rose-200 text-rose-700 text-xs rounded-xl flex items-center gap-2">
                   <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0" />

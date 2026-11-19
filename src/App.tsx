@@ -299,13 +299,13 @@ export default function App() {
   const thaiShortTime = thaiTime.timeStr.substring(0, 5);
 
   const mainContent = (
-    <div className="space-y-6">
+    <div className="space-y-4 sm:space-y-5 w-full min-w-0 flex-1 flex flex-col">
       {/* Offline Alert & Pending Queue Toast */}
       {(!networkOnline || offlineQueueCount > 0) && (
-        <div className="bg-amber-500 text-white px-4 py-2.5 rounded-2xl shadow-md flex items-center justify-between gap-3 text-xs sm:text-sm animate-pulse">
-          <div className="flex items-center gap-2">
+        <div className="bg-amber-500 text-white px-3.5 sm:px-4 py-2.5 rounded-2xl shadow-md flex flex-wrap items-center justify-between gap-2.5 text-xs sm:text-sm animate-pulse">
+          <div className="flex items-center gap-2 min-w-0">
             <WifiOff className="w-4 h-4 shrink-0" />
-            <span>
+            <span className="break-words">
               {!networkOnline ? 'กำลังใช้งานในโหมดออฟไลน์' : 'มีข้อมูลรอการซิงค์'}{' '}
               {offlineQueueCount > 0 && `(${offlineQueueCount} รายการค้างอยู่ในเครื่อง)`}
             </span>
@@ -315,7 +315,7 @@ export default function App() {
               type="button"
               disabled={isSyncing}
               onClick={handleSyncOffline}
-              className="px-3 py-1 bg-white text-amber-800 font-bold rounded-lg text-xs hover:bg-amber-50 transition cursor-pointer"
+              className="px-3 py-1.5 bg-white text-amber-800 font-bold rounded-lg text-xs hover:bg-amber-50 transition cursor-pointer shrink-0"
             >
               {isSyncing ? 'กำลังซิงค์...' : 'ซิงค์ทันที'}
             </button>
@@ -325,16 +325,16 @@ export default function App() {
 
       {/* Sync Notification Toast */}
       {syncToast && (
-        <div className="fixed bottom-5 right-5 z-50 bg-emerald-600 text-white px-4 py-3 rounded-2xl shadow-2xl flex items-center gap-2.5 text-sm animate-in fade-in slide-in-from-bottom-4">
-          <CheckCircle2 className="w-5 h-5 text-emerald-200" />
-          <span>{syncToast}</span>
+        <div className="fixed bottom-4 inset-x-3 sm:inset-x-auto sm:right-5 sm:max-w-md z-50 bg-emerald-600 text-white px-4 py-3 rounded-2xl shadow-2xl flex items-center gap-2.5 text-xs sm:text-sm animate-in fade-in slide-in-from-bottom-4">
+          <CheckCircle2 className="w-5 h-5 text-emerald-200 shrink-0" />
+          <span className="flex-1 break-words">{syncToast}</span>
         </div>
       )}
 
       {/* ADMIN NAVIGATION TABS */}
       {isAdmin && (
-        <div className="bg-white rounded-2xl p-2 border border-slate-200 shadow-xs overflow-x-auto">
-          <div className="flex items-center gap-1.5 min-w-max">
+        <div className="bg-white rounded-2xl p-1.5 sm:p-2 border border-slate-200 shadow-xs overflow-x-auto max-w-full">
+          <div className="flex items-center gap-1 sm:gap-1.5 min-w-max">
             <button
               type="button"
               onClick={() => setAdminTab('overview')}
@@ -538,7 +538,7 @@ export default function App() {
   );
 
   return (
-    <div className="min-h-screen bg-slate-100/70 text-slate-800 flex flex-col">
+    <div className="min-h-dvh w-full overflow-x-clip bg-slate-100/70 text-slate-800 flex flex-col">
       <Navbar
         currentUser={currentUser}
         onLogout={handleLogout}
@@ -559,12 +559,12 @@ export default function App() {
         onOpenDatabaseModal={() => setIsDbShieldModalOpen(true)}
       />
 
-      <main className="flex-1 p-2 sm:p-6 lg:p-8 flex justify-center">
+      <main className="flex-1 w-full px-2 py-2.5 sm:px-4 sm:py-4 lg:px-6 lg:py-5 flex flex-col items-center min-w-0 pb-safe">
         {deviceMode === 'ios' ? (
           /* ================= iOS (iPhone) SIMULATION FRAME ================= */
-          <div className="w-full max-w-[420px] bg-slate-950 p-3.5 rounded-[52px] shadow-2xl border-[5px] border-slate-700/80 relative my-2 ring-1 ring-white/10">
+          <div className="w-full max-w-[min(420px,100%)] bg-slate-950 p-3 sm:p-3.5 rounded-[44px] sm:rounded-[52px] shadow-2xl border-[5px] border-slate-700/80 relative my-auto ring-1 ring-white/10">
             {/* iOS Dynamic Island & Status Bar */}
-            <div className="px-5 pt-1.5 pb-2 flex items-center justify-between text-white text-[12px] font-semibold">
+            <div className="px-4 sm:px-5 pt-1.5 pb-2 flex items-center justify-between text-white text-[12px] font-semibold">
               <span>{thaiShortTime}</span>
               {/* Dynamic Island */}
               <div className="w-24 h-5 bg-black rounded-full mx-auto flex items-center justify-center gap-1.5 px-2">
@@ -579,10 +579,10 @@ export default function App() {
             </div>
 
             {/* Inner iOS Screen */}
-            <div className="bg-slate-50 rounded-[40px] overflow-y-auto max-h-[82vh] p-3 text-slate-800 shadow-inner">
+            <div className="bg-slate-50 rounded-[36px] sm:rounded-[40px] overflow-y-auto overflow-x-hidden h-[min(calc(100dvh-185px),760px)] min-h-[360px] p-2.5 sm:p-3 text-slate-800 shadow-inner">
               <div className="text-center py-1 mb-2 bg-slate-900 text-white rounded-xl text-[10px] font-medium flex items-center justify-center gap-1.5">
-                <Apple className="w-3 h-3 text-white" />
-                <span>มุมมอง Apple iPhone (iOS) • เวลาไทย {thaiShortTime} น.</span>
+                <Apple className="w-3 h-3 text-white shrink-0" />
+                <span className="truncate">มุมมอง Apple iPhone (iOS) • เวลาไทย {thaiShortTime} น.</span>
               </div>
               {mainContent}
             </div>
@@ -594,7 +594,7 @@ export default function App() {
           </div>
         ) : deviceMode === 'android' ? (
           /* ================= ANDROID SIMULATION FRAME ================= */
-          <div className="w-full max-w-[420px] bg-slate-900 p-3.5 rounded-[40px] shadow-2xl border-[5px] border-slate-700 relative my-2 ring-1 ring-emerald-500/20">
+          <div className="w-full max-w-[min(420px,100%)] bg-slate-900 p-3 sm:p-3.5 rounded-[36px] sm:rounded-[40px] shadow-2xl border-[5px] border-slate-700 relative my-auto ring-1 ring-emerald-500/20">
             {/* Android Status Bar & Punch-hole Camera */}
             <div className="px-4 pt-1 pb-2 flex items-center justify-between text-white text-[11px] font-mono">
               <span className="font-sans font-bold">{thaiShortTime}</span>
@@ -607,10 +607,10 @@ export default function App() {
             </div>
 
             {/* Inner Android Screen */}
-            <div className="bg-slate-50 rounded-[32px] overflow-y-auto max-h-[82vh] p-3 text-slate-800 shadow-inner">
+            <div className="bg-slate-50 rounded-[28px] sm:rounded-[32px] overflow-y-auto overflow-x-hidden h-[min(calc(100dvh-185px),760px)] min-h-[360px] p-2.5 sm:p-3 text-slate-800 shadow-inner">
               <div className="text-center py-1 mb-2 bg-emerald-950 text-emerald-300 rounded-xl text-[10px] font-medium flex items-center justify-center gap-1.5">
-                <Smartphone className="w-3 h-3 text-emerald-400" />
-                <span>มุมมอง Google Android • เวลาไทย {thaiShortTime} น.</span>
+                <Smartphone className="w-3 h-3 text-emerald-400 shrink-0" />
+                <span className="truncate">มุมมอง Google Android • เวลาไทย {thaiShortTime} น.</span>
               </div>
               {mainContent}
             </div>
@@ -621,8 +621,8 @@ export default function App() {
             </div>
           </div>
         ) : (
-          /* ================= FULL COMPUTER / DESKTOP VIEW ================= */
-          <div className="w-full max-w-7xl">{mainContent}</div>
+          /* ================= FULL SCREEN FLUID VIEW ================= */
+          <div className="w-full min-w-0 flex-1 flex flex-col">{mainContent}</div>
         )}
       </main>
 

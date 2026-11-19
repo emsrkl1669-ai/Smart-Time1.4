@@ -43,11 +43,11 @@ export const AdminMapViewer: React.FC<AdminMapViewerProps> = ({ records, locatio
       : selectedLocation?.longitude || 100.594069;
 
   return (
-    <div className="bg-white rounded-3xl border border-slate-200 overflow-hidden shadow-xs p-5 sm:p-6 space-y-5">
+    <div className="bg-white rounded-3xl border border-slate-200 overflow-hidden shadow-xs p-3.5 sm:p-6 space-y-4 sm:space-y-5 w-full min-w-0">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-        <div>
+        <div className="min-w-0">
           <h3 className="text-base sm:text-lg font-bold text-slate-800 flex items-center gap-2">
-            <MapPin className="w-5 h-5 text-sky-600" /> แผนที่ปักหมุดพิกัดลงเวลา & จุดปฏิบัติงาน (Live Map)
+            <MapPin className="w-5 h-5 text-sky-600 shrink-0" /> แผนที่ปักหมุดพิกัดลงเวลา & จุดปฏิบัติงาน (Live Map)
           </h3>
           <p className="text-xs text-slate-500">
             ดูตำแหน่งจริงของพนักงานและอาสาสมัครที่ลงเวลา หรือตรวจสอบจุดปฏิบัติงานที่กำหนดโดย Admin
@@ -56,7 +56,7 @@ export const AdminMapViewer: React.FC<AdminMapViewerProps> = ({ records, locatio
 
         {/* View Switcher & External Link */}
         <div className="flex items-center gap-2 flex-wrap">
-          <div className="bg-slate-100 p-1 rounded-xl flex items-center text-xs font-semibold">
+          <div className="bg-slate-100 p-1 rounded-xl flex items-center flex-wrap gap-1 text-xs font-semibold">
             <button
               type="button"
               onClick={() => setViewMode('attendance')}
@@ -92,9 +92,9 @@ export const AdminMapViewer: React.FC<AdminMapViewerProps> = ({ records, locatio
         </div>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 sm:gap-5">
         {/* Map View Box (2 Cols) */}
-        <div className="lg:col-span-2 rounded-2xl overflow-hidden border border-slate-200 bg-slate-100 h-96 sm:h-[480px] relative shadow-inner">
+        <div className="lg:col-span-2 rounded-2xl overflow-hidden border border-slate-200 bg-slate-100 h-[44dvh] min-h-[280px] sm:min-h-[380px] lg:h-[calc(100dvh-250px)] lg:min-h-[460px] relative shadow-inner min-w-0">
           <iframe
             title="Full Map View"
             width="100%"
@@ -177,7 +177,7 @@ export const AdminMapViewer: React.FC<AdminMapViewerProps> = ({ records, locatio
         </div>
 
         {/* List of Pins (1 Col) */}
-        <div className="rounded-2xl border border-slate-200 bg-slate-50/50 p-3 h-96 sm:h-[480px] flex flex-col">
+        <div className="rounded-2xl border border-slate-200 bg-slate-50/50 p-3 h-[38dvh] min-h-[260px] sm:min-h-[340px] lg:h-[calc(100dvh-250px)] lg:min-h-[460px] flex flex-col min-w-0">
           <div className="px-2 py-1 mb-2 font-semibold text-xs text-slate-700 flex items-center justify-between">
             <span>
               {viewMode === 'attendance'

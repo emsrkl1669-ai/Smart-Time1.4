@@ -934,10 +934,10 @@ export const CameraCapture: React.FC<CameraCaptureProps> = ({
       />
 
       {/* Security Rule Badge */}
-      <div className="mb-2.5 px-3 py-1.5 bg-amber-50 border border-amber-200/80 rounded-xl flex items-center justify-between text-[11px] text-amber-900">
-        <div className="flex items-center gap-1.5 font-medium">
+      <div className="mb-2.5 px-3 py-1.5 bg-amber-50 border border-amber-200/80 rounded-xl flex flex-wrap items-center justify-between gap-1.5 text-[11px] text-amber-900">
+        <div className="flex items-center gap-1.5 font-medium min-w-0">
           <ShieldCheck className="w-3.5 h-3.5 text-amber-600 shrink-0" />
-          <span>กล้องถ่ายภาพใบหน้าแนวตั้ง (LIVE CAMERA ONLY)</span>
+          <span className="truncate">กล้องถ่ายภาพใบหน้าแนวตั้ง (LIVE CAMERA ONLY)</span>
         </div>
         <span className="text-[10px] bg-amber-200/70 text-amber-900 px-2 py-0.5 rounded-full font-semibold shrink-0">
           iOS & Android
@@ -946,21 +946,22 @@ export const CameraCapture: React.FC<CameraCaptureProps> = ({
 
       {photo ? (
         // Preview Captured Crisp Portrait Photo (bottom-left watermark unobstructed)
-        <div className="relative rounded-2xl overflow-hidden border-2 border-emerald-500 bg-slate-900 shadow-md aspect-[3/4] w-full max-w-[360px] sm:max-w-[390px] mx-auto">
+        <div className="relative rounded-2xl overflow-hidden border-2 border-emerald-500 bg-slate-900 shadow-md aspect-[3/4] w-full max-w-[min(100%,380px)] max-h-[62dvh] mx-auto">
           <img
             src={photo}
             alt="รูปถ่ายยืนยันตัวตนสดแนวตั้ง"
             className="w-full h-full object-cover"
           />
 
-          <div className="absolute top-3 left-3 bg-emerald-600/95 backdrop-blur-xs text-white text-xs px-3 py-1 rounded-full flex items-center gap-1.5 font-medium shadow-xs">
-            <CheckCircle2 className="w-3.5 h-3.5 text-white" /> ถ่ายภาพแนวตั้ง & ประทับพิกัดแล้ว
+          <div className="absolute top-3 left-3 bg-emerald-600/95 backdrop-blur-xs text-white text-[11px] sm:text-xs px-2.5 sm:px-3 py-1 rounded-full flex items-center gap-1.5 font-medium shadow-xs max-w-[60%] truncate">
+            <CheckCircle2 className="w-3.5 h-3.5 text-white shrink-0" />
+            <span className="truncate">ถ่ายภาพแนวตั้งแล้ว</span>
           </div>
 
           <button
             type="button"
             onClick={handleRetake}
-            className="absolute top-3 right-3 bg-white/95 hover:bg-white text-slate-800 text-xs px-3.5 py-2 rounded-xl font-semibold shadow-md flex items-center gap-1.5 transition active:scale-95 cursor-pointer"
+            className="absolute top-3 right-3 bg-white/95 hover:bg-white text-slate-800 text-xs px-3 py-1.5 sm:px-3.5 sm:py-2 rounded-xl font-semibold shadow-md flex items-center gap-1.5 transition active:scale-95 cursor-pointer"
           >
             <RefreshCw className="w-3.5 h-3.5" /> ถ่ายใหม่
           </button>
@@ -968,7 +969,7 @@ export const CameraCapture: React.FC<CameraCaptureProps> = ({
       ) : (
         <div className="space-y-2.5">
           {/* Live Vertical Portrait Camera Viewfinder (3:4 mobile selfie orientation) */}
-          <div className="relative rounded-2xl overflow-hidden bg-slate-950 border border-slate-800 shadow-inner aspect-[3/4] w-full max-w-[360px] sm:max-w-[390px] mx-auto min-h-[360px] flex flex-col items-center justify-center">
+          <div className="relative rounded-2xl overflow-hidden bg-slate-950 border border-slate-800 shadow-inner aspect-[3/4] w-full max-w-[min(100%,380px)] mx-auto min-h-[260px] sm:min-h-[340px] max-h-[62dvh] flex flex-col items-center justify-center">
             {/* Flash animation */}
             {flashEffect && <div className="absolute inset-0 bg-white z-30 animate-out fade-out duration-200" />}
 
@@ -1001,10 +1002,10 @@ export const CameraCapture: React.FC<CameraCaptureProps> = ({
               </div>
             </div>
 
-            {/* Vertical Oval Face Guide (shifted up slightly so bottom watermark stays clear) */}
-            <div className="absolute inset-0 pb-20 pointer-events-none flex items-center justify-center">
-              <div className="w-44 h-56 sm:w-48 sm:h-64 rounded-full border-2 border-dashed border-emerald-400/75 shadow-[0_0_0_9999px_rgba(0,0,0,0.34)] flex items-end justify-center pb-3">
-                <span className="text-[10px] sm:text-[11px] text-white/95 font-medium tracking-wide bg-black/60 px-2.5 py-0.5 rounded-full backdrop-blur-xs border border-white/15">
+            {/* Vertical Oval Face Guide (scales proportionally to fit any screen size) */}
+            <div className="absolute inset-0 pb-16 sm:pb-20 pointer-events-none flex items-center justify-center">
+              <div className="w-[54%] max-w-[192px] aspect-[3/4] max-h-[66%] rounded-full border-2 border-dashed border-emerald-400/75 shadow-[0_0_0_9999px_rgba(0,0,0,0.34)] flex items-end justify-center pb-2.5 sm:pb-3">
+                <span className="text-[10px] sm:text-[11px] text-white/95 font-medium tracking-wide bg-black/60 px-2 sm:px-2.5 py-0.5 rounded-full backdrop-blur-xs border border-white/15 whitespace-nowrap">
                   จัดใบหน้าให้อยู่ในกรอบแนวตั้ง
                 </span>
               </div>
@@ -1088,8 +1089,8 @@ export const CameraCapture: React.FC<CameraCaptureProps> = ({
 
             {/* Bottom Bar: Left Live Watermark Preview + Right Shutter Button (non-overlapping) */}
             <div className="absolute bottom-2.5 inset-x-2.5 z-20 flex items-end justify-between gap-2 pointer-events-none">
-              <div className="bg-slate-950/82 backdrop-blur-md border border-emerald-400/40 border-l-4 border-l-emerald-400 rounded-xl px-2.5 py-1.5 text-white max-w-[70%] space-y-0.5 shadow-lg">
-                <div className="flex items-center gap-1.5 text-[11px] font-bold text-emerald-300 leading-tight">
+              <div className="bg-slate-950/82 backdrop-blur-md border border-emerald-400/40 border-l-4 border-l-emerald-400 rounded-xl px-2 sm:px-2.5 py-1.5 text-white max-w-[66%] sm:max-w-[70%] space-y-0.5 shadow-lg">
+                <div className="flex items-center gap-1.5 text-[10px] sm:text-[11px] font-bold text-emerald-300 leading-tight">
                   <span>Smart Time</span>
                   <span className="text-[9px] text-slate-300 font-normal">• {thaiLive.timeStr} น.</span>
                 </div>
@@ -1110,11 +1111,11 @@ export const CameraCapture: React.FC<CameraCaptureProps> = ({
                   type="button"
                   onClick={handleCapture}
                   disabled={isInitializing || !!cameraError || !isLiveReady}
-                  className="w-14 h-14 sm:w-16 sm:h-16 rounded-full bg-white hover:bg-slate-100 p-1 flex items-center justify-center shadow-xl active:scale-90 transition disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+                  className="w-13 h-13 sm:w-16 sm:h-16 rounded-full bg-white hover:bg-slate-100 p-1 flex items-center justify-center shadow-xl active:scale-90 transition disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
                   title="กดเพื่อถ่ายรูปใบหน้าแนวตั้ง"
                 >
                   <div className="w-full h-full rounded-full border-4 border-slate-900 flex items-center justify-center bg-white hover:bg-slate-50 transition">
-                    <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-full bg-emerald-500 flex items-center justify-center shadow-inner">
+                    <div className="w-8 h-8 sm:w-10 sm:h-10 rounded-full bg-emerald-500 flex items-center justify-center shadow-inner">
                       <Camera className="w-4 h-4 sm:w-5 sm:h-5 text-white" />
                     </div>
                   </div>
@@ -1127,7 +1128,7 @@ export const CameraCapture: React.FC<CameraCaptureProps> = ({
           </div>
 
           {/* Always-visible Universal Mobile Camera Fallback Bar (works across all Android/iOS versions & in-app browsers like LINE/Facebook) */}
-          <div className="max-w-[360px] sm:max-w-[390px] mx-auto flex items-center justify-between gap-2 bg-slate-50 border border-slate-200 rounded-xl px-3 py-2">
+          <div className="max-w-[min(100%,380px)] mx-auto flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-2 bg-slate-50 border border-slate-200 rounded-xl px-3 py-2">
             <span className="text-[11px] text-slate-600 leading-tight">
               หากจอดำหรือเปิดจาก LINE / Safari รุ่นเก่า:
             </span>
@@ -1135,7 +1136,7 @@ export const CameraCapture: React.FC<CameraCaptureProps> = ({
               type="button"
               onClick={() => nativeCameraInputRef.current?.click()}
               disabled={isProcessingNativePhoto}
-              className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white text-[11px] font-semibold rounded-lg flex items-center gap-1.5 transition active:scale-95 shrink-0 cursor-pointer disabled:opacity-50"
+              className="px-3 py-2 sm:py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white text-[11px] font-semibold rounded-lg flex items-center justify-center gap-1.5 transition active:scale-95 shrink-0 cursor-pointer disabled:opacity-50"
             >
               <Smartphone className="w-3.5 h-3.5" />
               <span>{isProcessingNativePhoto ? 'กำลังประมวลผล...' : 'ใช้กล้องมือถือโดยตรง'}</span>

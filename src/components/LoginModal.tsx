@@ -193,60 +193,150 @@ export const LoginModal: React.FC<LoginModalProps> = ({ onLoginSuccess }) => {
   });
 
   return (
-    <div className="min-h-screen bg-slate-900 flex items-center justify-center p-3 sm:p-4 relative overflow-hidden">
-      {/* Background decoration elements */}
-      <div className="absolute top-0 -left-20 w-96 h-96 bg-indigo-600/20 rounded-full blur-3xl pointer-events-none" />
-      <div className="absolute bottom-0 -right-20 w-96 h-96 bg-emerald-600/20 rounded-full blur-3xl pointer-events-none" />
+    <div className="min-h-dvh w-full overflow-x-clip bg-white lg:bg-slate-900 grid grid-cols-1 lg:grid-cols-12 relative">
+      {/* Left Brand & Cloud DB Hero Panel (Desktop/Large Tablet Full-Screen Split) */}
+      <div className="hidden lg:flex lg:col-span-6 xl:col-span-7 bg-slate-900 text-white flex-col justify-between p-8 xl:p-12 relative overflow-hidden min-h-dvh">
+        <div className="absolute top-0 -left-24 w-96 h-96 bg-indigo-600/25 rounded-full blur-3xl pointer-events-none" />
+        <div className="absolute bottom-0 -right-24 w-96 h-96 bg-emerald-600/25 rounded-full blur-3xl pointer-events-none" />
 
-      <div className="bg-white rounded-3xl max-w-lg w-full p-5 sm:p-7 shadow-2xl relative z-10 border border-slate-100 animate-in fade-in zoom-in-95 duration-200">
-        {/* App Title & Central Database Status */}
-        <div className="text-center mb-5">
-          <div className="inline-flex p-3 bg-gradient-to-tr from-indigo-600 to-emerald-500 rounded-2xl text-white shadow-md shadow-indigo-600/30 mb-2.5">
+        {/* Brand Header */}
+        <div className="relative z-10 flex items-center gap-3.5">
+          <div className="p-3 bg-gradient-to-tr from-indigo-600 to-emerald-500 rounded-2xl text-white shadow-lg shadow-indigo-600/30">
             <ShieldCheck className="w-8 h-8" />
           </div>
-          <h1 className="text-xl sm:text-2xl font-black text-slate-900 tracking-tight">
-            Smart Time Attendance
-          </h1>
-          <p className="text-xs text-slate-500 mt-1">
-            ระบบลงเวลาปฏิบัติงาน & เช็คอิน GPS ถ่ายภาพ
-          </p>
+          <div>
+            <h1 className="text-2xl xl:text-3xl font-black tracking-tight text-white">
+              Smart Time Attendance
+            </h1>
+            <p className="text-xs xl:text-sm text-slate-300">
+              ระบบลงเวลาปฏิบัติงาน & เช็คอิน GPS ถ่ายภาพใบหน้าแนวตั้ง (iOS • Android • Web)
+            </p>
+          </div>
+        </div>
 
-          {/* Centralized Database Unified Notice */}
-          <div className="mt-3 p-2.5 bg-gradient-to-r from-emerald-50 to-indigo-50 border border-emerald-200/80 rounded-2xl text-left">
-            <div className="flex items-center justify-between gap-2">
-              <div className="flex items-center gap-2">
-                <span className="relative flex h-2.5 w-2.5">
+        {/* Center Highlight Cards */}
+        <div className="relative z-10 space-y-5 my-auto py-8 max-w-2xl">
+          <div className="p-5 xl:p-6 rounded-3xl bg-white/5 border border-white/10 backdrop-blur-md space-y-3">
+            <div className="flex items-center justify-between gap-2 flex-wrap">
+              <div className="flex items-center gap-2.5">
+                <span className="relative flex h-3 w-3 shrink-0">
                   <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-                  <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-500"></span>
+                  <span className="relative inline-flex rounded-full h-3 w-3 bg-emerald-500"></span>
                 </span>
-                <span className="text-[11px] font-bold text-slate-800">
+                <span className="text-sm xl:text-base font-bold text-white">
                   ฐานข้อมูลกลางเดียวกันทุกเครื่อง (Centralized Cloud Database)
                 </span>
               </div>
-              <button
-                type="button"
-                onClick={() => setShowQrModal(true)}
-                className="text-[10px] text-indigo-700 bg-white hover:bg-indigo-100 px-2 py-1 rounded-lg border border-indigo-200 font-semibold flex items-center gap-1 transition cursor-pointer shrink-0"
-                title="เปิดบนมือถือเครื่องอื่นด้วย QR Code"
-              >
-                <QrCode className="w-3 h-3 text-indigo-600" />
-                <span>เปิดบนมือถือ</span>
-              </button>
+              {dbStatus.userCount > 0 && (
+                <span className="text-xs font-semibold px-2.5 py-1 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-400/30">
+                  พร้อมใช้งาน {dbStatus.userCount} บัญชี
+                </span>
+              )}
             </div>
-            <p className="text-[10px] text-slate-600 mt-1">
-              • สามารถลงชื่อเข้าใช้งานได้จากทุกเครื่องและอุปกรณ์ (มือถือ iPhone, Android, แท็บเล็ต, PC)
-              <br />
-              • เชื่อมต่อฐานข้อมูลเดียวกันกับที่ Admin สร้างให้แบบ Real-Time {dbStatus.userCount > 0 && `(พร้อมใช้งาน ${dbStatus.userCount} บัญชี)`}
+            <p className="text-xs xl:text-sm text-slate-300 leading-relaxed">
+              • ลงชื่อเข้าใช้งานได้จากทุกอุปกรณ์ (iPhone iOS, Android, แท็บเล็ต, คอมพิวเตอร์) และทุกเบราว์เซอร์<br />
+              • บันทึกข้อมูลการลงเวลา รูปถ่าย และพิกัด GPS ส่งเข้าฐานข้อมูลกลางแบบ Real-Time ทันที
             </p>
           </div>
 
-          {!isOnline() && (
-            <div className="mt-2.5 py-1.5 px-3 bg-amber-50 text-amber-800 text-[11px] rounded-xl border border-amber-200 inline-flex items-center gap-1.5 font-medium">
-              <WifiOff className="w-3.5 h-3.5 text-amber-600" />
-              <span>โหมดออฟไลน์: บัญชีที่เคยล็อกอินบนเครื่องนี้สามารถเข้าใช้งานได้</span>
+          <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+            <div className="p-4 rounded-2xl bg-white/5 border border-white/10 flex items-start gap-3">
+              <div className="p-2.5 rounded-xl bg-sky-500/20 text-sky-300 shrink-0">
+                <MapPin className="w-5 h-5" />
+              </div>
+              <div className="min-w-0">
+                <h3 className="text-xs font-bold text-white">จุดเช็คอินหลัก (LOC-BUALUANG-HQ)</h3>
+                <p className="text-[11px] text-slate-300 mt-1 leading-relaxed">
+                  มูลนิธิร่วมกุศล สมุทรปราการ (ศูนย์วิทยุบัวหลวง กู้ชีพกู้ภัย)
+                </p>
+              </div>
             </div>
-          )}
+
+            <div className="p-4 rounded-2xl bg-white/5 border border-white/10 flex items-center justify-between gap-3">
+              <div className="min-w-0">
+                <h3 className="text-xs font-bold text-white">เปิดบนมือถือด้วย QR Code</h3>
+                <p className="text-[11px] text-slate-300 mt-1">
+                  สแกนเพื่อเข้าสู่ระบบทันทีจากกล้องมือถือ
+                </p>
+                <button
+                  type="button"
+                  onClick={() => setShowQrModal(true)}
+                  className="mt-2 text-[11px] text-emerald-300 hover:text-emerald-200 font-semibold inline-flex items-center gap-1 cursor-pointer"
+                >
+                  <QrCode className="w-3.5 h-3.5" /> ขยาย QR Code
+                </button>
+              </div>
+              {localQrUrl && (
+                <img
+                  src={localQrUrl}
+                  alt="App QR Code"
+                  onClick={() => setShowQrModal(true)}
+                  className="w-16 h-16 rounded-xl bg-white p-1 shrink-0 cursor-pointer hover:scale-105 transition"
+                />
+              )}
+            </div>
+          </div>
         </div>
+
+        {/* Left Footer */}
+        <div className="relative z-10 flex items-center justify-between text-xs text-slate-400 border-t border-white/10 pt-4">
+          <span>รองรับกล้องถ่ายภาพใบหน้าแนวตั้ง (3:4) ทุกอุปกรณ์</span>
+          <span>🇹🇭 เวลาไทยมาตรฐาน GMT+7</span>
+        </div>
+      </div>
+
+      {/* Right Sign-In Panel (Full screen on Mobile, Full height panel on Desktop) */}
+      <div className="lg:col-span-6 xl:col-span-5 bg-white w-full min-h-dvh flex flex-col justify-center px-3.5 py-5 sm:px-8 sm:py-8 lg:px-8 xl:px-12 relative z-10 py-safe overflow-y-auto">
+        <div className="w-full max-w-md lg:max-w-lg mx-auto">
+          {/* App Title & Central Database Status (Compact on Desktop since Hero shows details) */}
+          <div className="text-center mb-4 sm:mb-5">
+            <div className="inline-flex lg:hidden p-2.5 sm:p-3 bg-gradient-to-tr from-indigo-600 to-emerald-500 rounded-2xl text-white shadow-md shadow-indigo-600/30 mb-2">
+              <ShieldCheck className="w-7 h-7 sm:w-8 sm:h-8" />
+            </div>
+            <h2 className="text-lg sm:text-2xl font-black text-slate-900 tracking-tight">
+              <span className="lg:hidden">Smart Time Attendance</span>
+              <span className="hidden lg:inline">เข้าสู่ระบบลงเวลาปฏิบัติงาน</span>
+            </h2>
+            <p className="text-[11px] sm:text-xs text-slate-500 mt-1">
+              ระบบลงเวลาปฏิบัติงาน & เช็คอิน GPS ถ่ายภาพ
+            </p>
+
+            {/* Centralized Database Unified Notice (Mobile & Tablet) */}
+            <div className="lg:hidden mt-3 p-2.5 bg-gradient-to-r from-emerald-50 to-indigo-50 border border-emerald-200/80 rounded-2xl text-left">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="flex items-center gap-2 min-w-0">
+                  <span className="relative flex h-2.5 w-2.5 shrink-0">
+                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                    <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-500"></span>
+                  </span>
+                  <span className="text-[11px] font-bold text-slate-800 leading-tight">
+                    ฐานข้อมูลกลางเดียวกันทุกเครื่อง (Centralized Cloud Database)
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowQrModal(true)}
+                  className="text-[10px] text-indigo-700 bg-white hover:bg-indigo-100 px-2.5 py-1 rounded-lg border border-indigo-200 font-semibold flex items-center gap-1 transition cursor-pointer shrink-0"
+                  title="เปิดบนมือถือเครื่องอื่นด้วย QR Code"
+                >
+                  <QrCode className="w-3 h-3 text-indigo-600" />
+                  <span>เปิดบนมือถือ</span>
+                </button>
+              </div>
+              <p className="text-[10px] text-slate-600 mt-1">
+                • สามารถลงชื่อเข้าใช้งานได้จากทุกเครื่องและอุปกรณ์ (มือถือ iPhone, Android, แท็บเล็ต, PC)
+                <br />
+                • เชื่อมต่อฐานข้อมูลเดียวกันกับที่ Admin สร้างให้แบบ Real-Time {dbStatus.userCount > 0 && `(พร้อมใช้งาน ${dbStatus.userCount} บัญชี)`}
+              </p>
+            </div>
+
+            {!isOnline() && (
+              <div className="mt-2.5 py-1.5 px-3 bg-amber-50 text-amber-800 text-[11px] rounded-xl border border-amber-200 inline-flex items-center gap-1.5 font-medium">
+                <WifiOff className="w-3.5 h-3.5 text-amber-600" />
+                <span>โหมดออฟไลน์: บัญชีที่เคยล็อกอินบนเครื่องนี้สามารถเข้าใช้งานได้</span>
+              </div>
+            )}
+          </div>
 
         {welcomeUserPrompt && (
           <div className="mb-4 p-3 bg-indigo-50 border border-indigo-200 text-indigo-900 text-xs rounded-xl flex items-center justify-between gap-2 animate-in fade-in">
@@ -279,7 +369,7 @@ export const LoginModal: React.FC<LoginModalProps> = ({ onLoginSuccess }) => {
         {/* Login Form */}
         <form onSubmit={handleSubmit} className="space-y-3.5">
           <div>
-            <div className="flex items-center justify-between mb-1">
+            <div className="flex flex-wrap items-center justify-between gap-1.5 mb-1">
               <label className="text-xs font-semibold text-slate-700">
                 ชื่อผู้ใช้งาน (Username / รหัสพนักงาน / ชื่อ-สกุล)
               </label>
@@ -287,7 +377,7 @@ export const LoginModal: React.FC<LoginModalProps> = ({ onLoginSuccess }) => {
                 <button
                   type="button"
                   onClick={() => setIsUsersDropdownOpen(!isUsersDropdownOpen)}
-                  className="text-[11px] text-indigo-600 hover:text-indigo-800 font-medium flex items-center gap-0.5 cursor-pointer"
+                  className="text-[11px] text-indigo-600 hover:text-indigo-800 font-medium flex items-center gap-0.5 cursor-pointer shrink-0"
                 >
                   <span>เลือกจากรายชื่อที่ Admin สร้าง</span>
                   {isUsersDropdownOpen ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
@@ -429,7 +519,7 @@ export const LoginModal: React.FC<LoginModalProps> = ({ onLoginSuccess }) => {
           </div>
 
           {/* Remember this Device (Cross-Reboot Persistence) */}
-          <div className="flex items-center justify-between py-1 px-1 bg-slate-50/70 rounded-xl border border-slate-100">
+          <div className="flex flex-wrap items-center justify-between gap-2 py-1.5 px-2 bg-slate-50/70 rounded-xl border border-slate-100">
             <label className="flex items-center gap-2 cursor-pointer select-none">
               <input
                 type="checkbox"
@@ -442,7 +532,7 @@ export const LoginModal: React.FC<LoginModalProps> = ({ onLoginSuccess }) => {
               </span>
             </label>
             <span className="text-[10px] text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-md border border-emerald-200/80 font-medium flex items-center gap-1">
-              <CheckCircle className="w-3 h-3 text-emerald-600" />
+              <CheckCircle className="w-3 h-3 text-emerald-600 shrink-0" />
               <span>เปิด-ปิดเครื่อง ข้อมูลไม่หาย</span>
             </span>
           </div>
@@ -556,7 +646,7 @@ export const LoginModal: React.FC<LoginModalProps> = ({ onLoginSuccess }) => {
         </div>
 
         {/* Footer info & device sync */}
-        <div className="mt-4 pt-3 border-t border-slate-100 flex items-center justify-between text-[10px] text-slate-400">
+        <div className="mt-4 pt-3 border-t border-slate-100 flex flex-wrap items-center justify-between gap-2 text-[10px] text-slate-400">
           <span>รองรับ iOS • Android • แท็บเล็ต • คอมพิวเตอร์</span>
           <button
             type="button"
@@ -567,12 +657,13 @@ export const LoginModal: React.FC<LoginModalProps> = ({ onLoginSuccess }) => {
             <span>{copiedLink ? 'คัดลอกลิงก์แล้ว' : 'คัดลอกลิงก์แอป'}</span>
           </button>
         </div>
+        </div>
       </div>
 
       {/* QR Code Modal for Accessing from Mobile Phones */}
       {showQrModal && (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-in fade-in">
-          <div className="bg-white rounded-3xl max-w-sm w-full p-6 text-center shadow-2xl border border-slate-100">
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4 z-50 animate-in fade-in overflow-y-auto">
+          <div className="bg-white rounded-3xl max-w-sm w-full p-5 sm:p-6 text-center shadow-2xl border border-slate-100 max-h-[92dvh] overflow-y-auto my-auto">
             <div className="inline-flex p-3 bg-indigo-50 text-indigo-600 rounded-2xl mb-3">
               <Smartphone className="w-7 h-7" />
             </div>

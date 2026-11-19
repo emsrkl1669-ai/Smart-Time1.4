@@ -70,29 +70,29 @@ export const MobileInstallPrompt: React.FC<MobileInstallPromptProps> = ({
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-xs flex items-center justify-center p-4 overflow-y-auto">
-      <div className="bg-white rounded-3xl max-w-md w-full overflow-hidden shadow-2xl animate-in fade-in zoom-in-95 duration-200 border border-slate-100">
+    <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-xs flex items-center justify-center p-2.5 sm:p-4 overflow-y-auto">
+      <div className="bg-white rounded-3xl max-w-md w-full overflow-hidden shadow-2xl animate-in fade-in zoom-in-95 duration-200 border border-slate-100 flex flex-col max-h-[92dvh] my-auto">
         {/* Header */}
-        <div className="p-5 bg-gradient-to-r from-slate-900 to-indigo-950 text-white flex items-center justify-between">
-          <div className="flex items-center gap-2.5">
-            <div className="p-2 bg-indigo-500/30 rounded-xl border border-indigo-400/30">
+        <div className="p-4 sm:p-5 bg-gradient-to-r from-slate-900 to-indigo-950 text-white flex items-center justify-between gap-2 shrink-0">
+          <div className="flex items-center gap-2.5 min-w-0">
+            <div className="p-2 bg-indigo-500/30 rounded-xl border border-indigo-400/30 shrink-0">
               <Smartphone className="w-5 h-5 text-indigo-300" />
             </div>
-            <div>
-              <h3 className="font-bold text-base leading-tight">ติดตั้งแอปบนมือถือ</h3>
-              <p className="text-xs text-slate-300">รองรับทั้ง iOS (iPhone) และ Android</p>
+            <div className="min-w-0">
+              <h3 className="font-bold text-sm sm:text-base leading-tight truncate">ติดตั้งแอปบนมือถือ</h3>
+              <p className="text-[11px] sm:text-xs text-slate-300 truncate">รองรับทั้ง iOS (iPhone) และ Android</p>
             </div>
           </div>
           <button
             type="button"
             onClick={onClose}
-            className="p-1.5 text-slate-400 hover:text-white rounded-lg transition"
+            className="p-1.5 text-slate-400 hover:text-white rounded-lg transition shrink-0 cursor-pointer"
           >
             <X className="w-5 h-5" />
           </button>
         </div>
 
-        <div className="p-5 space-y-4">
+        <div className="p-4 sm:p-5 space-y-4 overflow-y-auto flex-1">
           {isInstalled ? (
             <div className="p-4 bg-emerald-50 rounded-2xl border border-emerald-200 text-center space-y-2">
               <CheckCircle2 className="w-10 h-10 text-emerald-600 mx-auto" />

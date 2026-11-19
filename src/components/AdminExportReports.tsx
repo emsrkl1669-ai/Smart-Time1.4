@@ -69,7 +69,7 @@ export const AdminExportReports: React.FC<AdminExportReportsProps> = ({
   };
 
   return (
-    <div className="bg-white rounded-3xl border border-slate-200 overflow-hidden shadow-xs p-5 sm:p-6 space-y-6">
+    <div className="bg-white rounded-3xl border border-slate-200 overflow-hidden shadow-xs p-3.5 sm:p-6 space-y-5 sm:space-y-6 w-full min-w-0">
       {/* Header */}
       <div>
         <h3 className="text-base sm:text-lg font-bold text-slate-800 flex items-center gap-2">
@@ -222,23 +222,23 @@ export const AdminExportReports: React.FC<AdminExportReportsProps> = ({
       </div>
 
       {/* Action Download Buttons */}
-      <div className="p-4 bg-gradient-to-r from-slate-900 to-indigo-950 text-white rounded-2xl flex flex-col sm:flex-row items-center justify-between gap-4">
-        <div>
+      <div className="p-4 bg-gradient-to-r from-slate-900 to-indigo-950 text-white rounded-2xl flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+        <div className="min-w-0">
           <h4 className="font-bold text-sm sm:text-base">ดาวน์โหลดรายงานที่เลือกเป็นไฟล์</h4>
           <p className="text-xs text-slate-300">
             สร้างไฟล์ Excel แท้ (.xlsx) หรือไฟล์ CSV ภาษาไทย ไม่เพี้ยน เปิดได้ในทุกอุปกรณ์
           </p>
         </div>
 
-        <div className="flex flex-wrap items-center gap-2.5 w-full sm:w-auto">
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 w-full lg:w-auto shrink-0">
           {/* Excel Button */}
           <button
             type="button"
             disabled={filteredRecords.length === 0}
             onClick={handleDownloadExcel}
-            className="flex-1 sm:flex-initial px-4 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold rounded-xl flex items-center justify-center gap-1.5 transition shadow-sm active:scale-95 disabled:opacity-50 cursor-pointer"
+            className="px-4 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold rounded-xl flex items-center justify-center gap-1.5 transition shadow-sm active:scale-95 disabled:opacity-50 cursor-pointer"
           >
-            <FileSpreadsheet className="w-4 h-4" />
+            <FileSpreadsheet className="w-4 h-4 shrink-0" />
             <span>ดาวน์โหลด Excel (.xlsx)</span>
           </button>
 
@@ -247,9 +247,9 @@ export const AdminExportReports: React.FC<AdminExportReportsProps> = ({
             type="button"
             disabled={filteredRecords.length === 0}
             onClick={handleDownloadCSV}
-            className="flex-1 sm:flex-initial px-4 py-2.5 bg-sky-600 hover:bg-sky-500 text-white text-xs font-bold rounded-xl flex items-center justify-center gap-1.5 transition shadow-sm active:scale-95 disabled:opacity-50 cursor-pointer"
+            className="px-4 py-2.5 bg-sky-600 hover:bg-sky-500 text-white text-xs font-bold rounded-xl flex items-center justify-center gap-1.5 transition shadow-sm active:scale-95 disabled:opacity-50 cursor-pointer"
           >
-            <FileText className="w-4 h-4" />
+            <FileText className="w-4 h-4 shrink-0" />
             <span>ดาวน์โหลด CSV (.csv)</span>
           </button>
 
@@ -258,9 +258,9 @@ export const AdminExportReports: React.FC<AdminExportReportsProps> = ({
             type="button"
             disabled={filteredRecords.length === 0 || isExportingPdf}
             onClick={handlePrint}
-            className="flex-1 sm:flex-initial px-4 py-2.5 bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold rounded-xl flex items-center justify-center gap-1.5 transition shadow-sm active:scale-95 disabled:opacity-50 cursor-pointer"
+            className="px-4 py-2.5 bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold rounded-xl flex items-center justify-center gap-1.5 transition shadow-sm active:scale-95 disabled:opacity-50 cursor-pointer"
           >
-            <FileText className="w-4 h-4" />
+            <FileText className="w-4 h-4 shrink-0" />
             <span>{isExportingPdf ? 'กำลังสร้าง PDF...' : 'ดาวน์โหลด PDF (.pdf)'}</span>
           </button>
         </div>

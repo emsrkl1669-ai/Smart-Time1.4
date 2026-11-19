@@ -1,8 +1,26 @@
 @import "tailwindcss";
 
 @layer base {
+  html, body {
+    width: 100%;
+    max-width: 100%;
+    overflow-x: clip;
+    -webkit-tap-highlight-color: transparent;
+    -webkit-text-size-adjust: 100%;
+  }
+
   body {
     font-family: 'Kanit', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    min-height: 100vh;
+    min-height: 100dvh;
+  }
+
+  #root {
+    width: 100%;
+    min-height: 100vh;
+    min-height: 100dvh;
+    display: flex;
+    flex-direction: column;
   }
 }
 
@@ -18,16 +36,16 @@
   background: #cbd5e1;
   border-radius: 9999px;
 }
+
 @layer utilities {
   .pb-safe {
-    padding-bottom: env(safe-area-inset-bottom, 16px);
+    padding-bottom: max(env(safe-area-inset-bottom, 0px), 12px);
   }
   .pt-safe {
     padding-top: env(safe-area-inset-top, 0px);
   }
+  .min-h-dvh-safe {
+    min-height: 100vh;
+    min-height: 100dvh;
+  }
 }
-
-html, body {
-  -webkit-tap-highlight-color: transparent;
-}
-

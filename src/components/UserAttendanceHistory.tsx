@@ -25,8 +25,8 @@ export const UserAttendanceHistory: React.FC<UserAttendanceHistoryProps> = ({ re
   };
 
   return (
-    <div className="bg-white rounded-3xl border border-slate-200/90 p-5 sm:p-6 shadow-xs">
-      <div className="flex items-center justify-between mb-4">
+    <div className="bg-white rounded-3xl border border-slate-200/90 p-3.5 sm:p-6 shadow-xs w-full min-w-0">
+      <div className="flex flex-wrap items-center justify-between gap-2 mb-4">
         <div>
           <h3 className="text-base sm:text-lg font-bold text-slate-800 flex items-center gap-2">
             <Clock className="w-5 h-5 text-indigo-600" /> ประวัติการลงเวลาของฉัน
@@ -172,7 +172,7 @@ export const UserAttendanceHistory: React.FC<UserAttendanceHistoryProps> = ({ re
                 className="w-full h-auto max-h-[75vh] object-contain rounded-2xl"
               />
             </div>
-            <div className="p-3.5 sm:px-6 bg-slate-50 border-t border-slate-100 flex items-center justify-end gap-2">
+            <div className="p-3.5 sm:px-6 bg-slate-50 border-t border-slate-100 flex flex-wrap items-center justify-end gap-2">
               <button
                 type="button"
                 onClick={() => handleDownloadPhoto(selectedPhotoRecord)}
@@ -195,22 +195,22 @@ export const UserAttendanceHistory: React.FC<UserAttendanceHistoryProps> = ({ re
 
       {/* Map Modal */}
       {selectedLocation && (
-        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white rounded-3xl max-w-lg w-full overflow-hidden shadow-2xl relative animate-in fade-in zoom-in-95 duration-200">
-            <div className="p-4 flex items-center justify-between border-b border-slate-100">
-              <div>
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4 overflow-y-auto">
+          <div className="bg-white rounded-3xl max-w-lg w-full overflow-hidden shadow-2xl relative animate-in fade-in zoom-in-95 duration-200 max-h-[92dvh] flex flex-col my-auto">
+            <div className="p-4 flex items-center justify-between border-b border-slate-100 shrink-0 gap-2">
+              <div className="min-w-0">
                 <h4 className="text-sm font-bold text-slate-800">พิกัดสถานที่ลงเวลา</h4>
                 <p className="text-xs text-slate-500 line-clamp-1">{selectedLocation.name}</p>
               </div>
               <button
                 type="button"
                 onClick={() => setSelectedLocation(null)}
-                className="p-1 text-slate-400 hover:text-slate-600 rounded-lg hover:bg-slate-100"
+                className="p-1.5 text-slate-400 hover:text-slate-600 rounded-lg hover:bg-slate-100 shrink-0 cursor-pointer"
               >
                 <X className="w-5 h-5" />
               </button>
             </div>
-            <div className="h-72 w-full bg-slate-100 relative">
+            <div className="h-60 sm:h-72 w-full bg-slate-100 relative shrink-0">
               <iframe
                 title="Location Map"
                 width="100%"
@@ -223,19 +223,19 @@ export const UserAttendanceHistory: React.FC<UserAttendanceHistoryProps> = ({ re
                 className="w-full h-full"
               />
             </div>
-            <div className="p-4 bg-slate-50 flex items-center justify-between">
+            <div className="p-3.5 sm:p-4 bg-slate-50 flex flex-wrap items-center justify-between gap-2 shrink-0">
               <a
                 href={`https://www.google.com/maps?q=${selectedLocation.lat},${selectedLocation.lng}`}
                 target="_blank"
                 rel="noreferrer"
-                className="px-3.5 py-1.5 bg-sky-600 text-white text-xs rounded-xl hover:bg-sky-700 transition flex items-center gap-1.5"
+                className="px-3.5 py-2 bg-sky-600 text-white text-xs rounded-xl hover:bg-sky-700 transition flex items-center gap-1.5"
               >
                 <ExternalLink className="w-3.5 h-3.5" /> นำทางใน Google Maps
               </a>
               <button
                 type="button"
                 onClick={() => setSelectedLocation(null)}
-                className="px-3.5 py-1.5 bg-slate-200 text-slate-700 text-xs rounded-xl hover:bg-slate-300 transition"
+                className="px-3.5 py-2 bg-slate-200 text-slate-700 text-xs rounded-xl hover:bg-slate-300 transition cursor-pointer"
               >
                 ปิด
               </button>

@@ -39,17 +39,17 @@ export const AdminOverview: React.FC<AdminOverviewProps> = ({
   const offlineRecordsCount = records.filter((r) => r.isOfflineRecord).length;
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-4 sm:space-y-6 w-full min-w-0">
       {/* Top Welcome Banner */}
-      <div className="bg-gradient-to-r from-slate-900 via-indigo-950 to-slate-900 text-white p-6 rounded-3xl shadow-sm relative overflow-hidden">
+      <div className="bg-gradient-to-r from-slate-900 via-indigo-950 to-slate-900 text-white p-4 sm:p-6 rounded-3xl shadow-sm relative overflow-hidden">
         <div className="relative z-10">
-          <span className="text-xs font-semibold px-3 py-1 rounded-full bg-indigo-500/30 text-indigo-200 border border-indigo-400/30 inline-block mb-2">
+          <span className="text-[11px] sm:text-xs font-semibold px-3 py-1 rounded-full bg-indigo-500/30 text-indigo-200 border border-indigo-400/30 inline-block mb-2">
             ศูนย์ควบคุมระบบสารสนเทศส่วนกลาง (Admin Dashboard)
           </span>
-          <h2 className="text-xl sm:text-2xl font-bold">
+          <h2 className="text-lg sm:text-2xl font-bold">
             ภาพรวมการลงเวลาและบุคลากรประจำวัน
           </h2>
-          <p className="text-xs sm:text-sm text-slate-300 mt-1 max-w-xl">
+          <p className="text-xs sm:text-sm text-slate-300 mt-1 max-w-2xl">
             ตรวจสอบข้อมูลการลงเวลา เข้า-ออกงาน พิกัดสถานที่จริง และการกระจายตัวของพนักงานและอาสาสมัครในทุกแผนก
           </p>
 
@@ -87,9 +87,9 @@ export const AdminOverview: React.FC<AdminOverviewProps> = ({
       </div>
 
       {/* KPI Cards Grid */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3.5">
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
         {/* Total Today Check-In */}
-        <div className="bg-white p-4 rounded-2xl border border-slate-200/90 shadow-2xs">
+        <div className="bg-white p-3.5 sm:p-4 rounded-2xl border border-slate-200/90 shadow-2xs min-w-0">
           <div className="flex items-center justify-between">
             <span className="text-xs font-semibold text-slate-500">ลงเวลาเข้างานวันนี้</span>
             <div className="p-2 bg-emerald-50 text-emerald-600 rounded-xl">
@@ -140,11 +140,11 @@ export const AdminOverview: React.FC<AdminOverviewProps> = ({
       </div>
 
       {/* Department Status Cards */}
-      <div className="bg-white rounded-3xl border border-slate-200 p-5 sm:p-6 shadow-xs space-y-4">
-        <div className="flex items-center justify-between">
-          <div>
+      <div className="bg-white rounded-3xl border border-slate-200 p-4 sm:p-6 shadow-xs space-y-4">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="min-w-0">
             <h3 className="font-bold text-slate-800 text-sm sm:text-base flex items-center gap-2">
-              <Building2 className="w-4 h-4 text-indigo-600" /> สถานะและการจัดกลุ่มตามแผนก (Departments)
+              <Building2 className="w-4 h-4 text-indigo-600 shrink-0" /> สถานะและการจัดกลุ่มตามแผนก (Departments)
             </h3>
             <p className="text-xs text-slate-500 mt-0.5">
               ระบบส่งแจ้งเตือนเจาะจงกลุ่ม LINE ตามการลงเวลาของแต่ละแผนก
@@ -154,13 +154,13 @@ export const AdminOverview: React.FC<AdminOverviewProps> = ({
           <button
             type="button"
             onClick={() => onNavigateTab('users')}
-            className="text-xs text-indigo-600 hover:text-indigo-700 font-semibold cursor-pointer"
+            className="text-xs text-indigo-600 hover:text-indigo-700 font-semibold cursor-pointer shrink-0"
           >
             จัดการแผนก & Token &rarr;
           </button>
         </div>
 
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3.5">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3.5">
           {departments.map((dept) => {
             const deptUsers = users.filter((u) => u.departmentId === dept.id);
             const deptTodayRecords = todayRecords.filter((r) => r.departmentId === dept.id);

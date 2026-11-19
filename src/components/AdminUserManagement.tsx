@@ -651,33 +651,33 @@ export const AdminUserManagement: React.FC<AdminUserManagementProps> = ({
   };
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-4 sm:space-y-5 w-full min-w-0">
       {/* Tab Switcher & Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-white p-4 rounded-2xl border border-slate-200">
-        <div className="flex items-center gap-2">
+      <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3 bg-white p-3.5 sm:p-4 rounded-2xl border border-slate-200">
+        <div className="flex flex-wrap items-center gap-2">
           <button
             type="button"
             onClick={() => setActiveTab('users')}
-            className={`px-4 py-2 rounded-xl text-xs sm:text-sm font-semibold transition flex items-center gap-2 cursor-pointer ${
+            className={`px-3.5 sm:px-4 py-2 rounded-xl text-xs sm:text-sm font-semibold transition flex items-center gap-2 cursor-pointer ${
               activeTab === 'users'
                 ? 'bg-indigo-600 text-white shadow-xs'
                 : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
             }`}
           >
-            <Users className="w-4 h-4" />
+            <Users className="w-4 h-4 shrink-0" />
             <span>จัดการผู้ใช้งาน ({users.length})</span>
           </button>
 
           <button
             type="button"
             onClick={() => setActiveTab('departments')}
-            className={`px-4 py-2 rounded-xl text-xs sm:text-sm font-semibold transition flex items-center gap-2 cursor-pointer ${
+            className={`px-3.5 sm:px-4 py-2 rounded-xl text-xs sm:text-sm font-semibold transition flex items-center gap-2 cursor-pointer ${
               activeTab === 'departments'
                 ? 'bg-indigo-600 text-white shadow-xs'
                 : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
             }`}
           >
-            <Building2 className="w-4 h-4" />
+            <Building2 className="w-4 h-4 shrink-0" />
             <span>จัดการ 9 หน่วยงาน & LINE Token ({allDepartments.length})</span>
           </button>
         </div>
@@ -729,8 +729,8 @@ export const AdminUserManagement: React.FC<AdminUserManagementProps> = ({
       {activeTab === 'users' && (
         <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-xs">
           {/* Filters Bar */}
-          <div className="p-4 bg-slate-50 border-b border-slate-200 flex flex-col md:flex-row gap-3">
-            <div className="relative flex-1">
+          <div className="p-3.5 sm:p-4 bg-slate-50 border-b border-slate-200 flex flex-col lg:flex-row gap-3">
+            <div className="relative flex-1 min-w-0">
               <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
               <input
                 type="text"
@@ -741,11 +741,11 @@ export const AdminUserManagement: React.FC<AdminUserManagementProps> = ({
               />
             </div>
 
-            <div className="flex gap-2">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:flex gap-2 shrink-0">
               <select
                 value={filterRole}
                 onChange={(e) => setFilterRole(e.target.value)}
-                className="px-3 py-2 text-xs sm:text-sm bg-white rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500 text-slate-700"
+                className="w-full lg:w-auto px-3 py-2 text-xs sm:text-sm bg-white rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500 text-slate-700"
               >
                 <option value="all">ทุกสิทธิ์ / ทุกบทบาท</option>
                 <option value="admin">👑 ผู้ดูแลระบบ (Admin)</option>
@@ -756,7 +756,7 @@ export const AdminUserManagement: React.FC<AdminUserManagementProps> = ({
               <select
                 value={filterDepartment}
                 onChange={(e) => setFilterDepartment(e.target.value)}
-                className="px-3 py-2 text-xs sm:text-sm bg-white rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500 text-slate-700 max-w-[200px]"
+                className="w-full lg:w-auto lg:max-w-[220px] px-3 py-2 text-xs sm:text-sm bg-white rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500 text-slate-700"
               >
                 <option value="all">ทุกกลุ่ม / แผนก</option>
                 {allDepartments.map((dept) => (
@@ -1146,10 +1146,10 @@ export const AdminUserManagement: React.FC<AdminUserManagementProps> = ({
 
       {/* MODAL: ADD / EDIT USER */}
       {(isAddUserOpen || editingUser) && (
-        <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-xs flex items-center justify-center p-4 overflow-y-auto">
-          <div className="bg-white rounded-3xl max-w-lg w-full overflow-hidden shadow-2xl animate-in fade-in zoom-in-95 duration-200">
-            <div className="p-4 sm:p-5 border-b border-slate-100 flex items-center justify-between bg-slate-50">
-              <h3 className="font-bold text-slate-800 text-base">
+        <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4 overflow-y-auto">
+          <div className="bg-white rounded-3xl max-w-lg w-full overflow-hidden shadow-2xl animate-in fade-in zoom-in-95 duration-200 max-h-[92dvh] flex flex-col my-auto">
+            <div className="p-4 sm:p-5 border-b border-slate-100 flex items-center justify-between bg-slate-50 shrink-0">
+              <h3 className="font-bold text-slate-800 text-sm sm:text-base">
                 {editingUser ? 'แก้ไขข้อมูลผู้ใช้งาน' : 'เพิ่มผู้ใช้งานใหม่'}
               </h3>
               <button
@@ -1158,13 +1158,13 @@ export const AdminUserManagement: React.FC<AdminUserManagementProps> = ({
                   setIsAddUserOpen(false);
                   setEditingUser(null);
                 }}
-                className="p-1 text-slate-400 hover:text-slate-600 rounded-lg hover:bg-slate-200"
+                className="p-1.5 text-slate-400 hover:text-slate-600 rounded-lg hover:bg-slate-200 cursor-pointer"
               >
                 <X className="w-5 h-5" />
               </button>
             </div>
 
-            <form onSubmit={handleSaveUser} className="p-4 sm:p-6 space-y-4 max-h-[80vh] overflow-y-auto">
+            <form onSubmit={handleSaveUser} className="p-4 sm:p-6 space-y-4 overflow-y-auto flex-1">
               {errorMsg && (
                 <div className="p-3 bg-rose-50 border border-rose-200 text-rose-700 text-xs rounded-xl flex items-center gap-2">
                   <AlertCircle className="w-4 h-4 shrink-0" />
@@ -1188,7 +1188,7 @@ export const AdminUserManagement: React.FC<AdminUserManagementProps> = ({
               </div>
 
               {/* Username & Password */}
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="block text-xs font-semibold text-slate-700 mb-1">
                     Username *
@@ -1219,7 +1219,7 @@ export const AdminUserManagement: React.FC<AdminUserManagementProps> = ({
               </div>
 
               {/* Role & Department (Matches Exact CSS Selector 1 & 2) */}
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="block text-xs font-semibold text-slate-700 mb-1">
                     สิทธิ์ / บทบาท *
@@ -1313,7 +1313,7 @@ export const AdminUserManagement: React.FC<AdminUserManagementProps> = ({
               </div>
 
               {/* Phone & Employee Code */}
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="block text-xs font-semibold text-slate-700 mb-1">
                     เบอร์โทรศัพท์
@@ -1383,22 +1383,22 @@ export const AdminUserManagement: React.FC<AdminUserManagementProps> = ({
 
       {/* MODAL: ADD / EDIT DEPARTMENT */}
       {isDeptModalOpen && (
-        <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-xs flex items-center justify-center p-4 overflow-y-auto">
-          <div className="bg-white rounded-3xl max-w-md w-full overflow-hidden shadow-2xl animate-in fade-in zoom-in-95 duration-200">
-            <div className="p-4 sm:p-5 border-b border-slate-100 flex items-center justify-between bg-slate-50">
-              <h3 className="font-bold text-slate-800 text-base">
+        <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4 overflow-y-auto">
+          <div className="bg-white rounded-3xl max-w-md w-full overflow-hidden shadow-2xl animate-in fade-in zoom-in-95 duration-200 max-h-[92dvh] flex flex-col my-auto">
+            <div className="p-4 sm:p-5 border-b border-slate-100 flex items-center justify-between bg-slate-50 shrink-0">
+              <h3 className="font-bold text-slate-800 text-sm sm:text-base">
                 {editingDept ? 'แก้ไขข้อมูลกลุ่ม/แผนก & LINE Token' : 'เพิ่มกลุ่ม/แผนกใหม่'}
               </h3>
               <button
                 type="button"
                 onClick={() => setIsDeptModalOpen(false)}
-                className="p-1 text-slate-400 hover:text-slate-600 rounded-lg hover:bg-slate-200"
+                className="p-1.5 text-slate-400 hover:text-slate-600 rounded-lg hover:bg-slate-200 cursor-pointer"
               >
                 <X className="w-5 h-5" />
               </button>
             </div>
 
-            <form onSubmit={handleSaveDept} className="p-4 sm:p-6 space-y-4">
+            <form onSubmit={handleSaveDept} className="p-4 sm:p-6 space-y-4 overflow-y-auto flex-1">
               {errorMsg && (
                 <div className="p-3 bg-rose-50 border border-rose-200 text-rose-700 text-xs rounded-xl flex items-center gap-2">
                   <AlertCircle className="w-4 h-4 shrink-0" />
@@ -1407,8 +1407,8 @@ export const AdminUserManagement: React.FC<AdminUserManagementProps> = ({
               )}
 
               {/* Department Name & Code */}
-              <div className="grid grid-cols-3 gap-3">
-                <div className="col-span-2">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div className="sm:col-span-2">
                   <label className="block text-xs font-semibold text-slate-700 mb-1">
                     ชื่อกลุ่ม / แผนก *
                   </label>
@@ -1593,8 +1593,8 @@ export const AdminUserManagement: React.FC<AdminUserManagementProps> = ({
 
       {/* CSV IMPORT MODAL */}
       {isCsvImportOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs animate-in fade-in">
-          <div className="bg-white rounded-3xl max-w-2xl w-full p-6 shadow-2xl border border-slate-100 max-h-[90vh] flex flex-col">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-slate-900/60 backdrop-blur-xs animate-in fade-in">
+          <div className="bg-white rounded-3xl max-w-2xl w-full p-4 sm:p-6 shadow-2xl border border-slate-100 max-h-[92dvh] flex flex-col">
             <div className="flex items-center justify-between pb-3 border-b border-slate-100 mb-4">
               <div className="flex items-center gap-2.5">
                 <div className="p-2 bg-indigo-50 text-indigo-600 rounded-xl">
